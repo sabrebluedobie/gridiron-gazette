@@ -28,7 +28,7 @@ from team_mascots import team_mascots
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 LEAGUE_ID = int(os.getenv("LEAGUE_ID", "0"))
 YEAR = int(os.getenv("YEAR", dt.datetime.now().year))
-WEEK_OVERRIDE = os.getenv("WEEK")  # optional override like WEEK=1
+WEEK_OVERRIDE = os.getenv("WEEK")  # optional override like WEEK=2
 
 # Google / Drive
 GDRIVE_DOC_ID = os.getenv("GDRIVE_DOC_ID")  # REQUIRED: update this Doc
@@ -57,6 +57,55 @@ def safe_team_name(team):
         return f"{getattr(team, 'location', '').strip()} {getattr(team, 'nickname', '').strip()}".strip()
 
 
+# ---------------- Player helpers ---------------- #
+
+def _player_line(p, include_delta: bool = True) -> str:
+    """Format a player as 'Name (POS): pts (proj X, ΔY)' with safe fallbacks."""
+    name = getattr(p, "name", "Unknown")
+    pos = getattr(p, "position", "")
+    pts = getattr(p, "points", 0.0) or 0.0
+    proj = getattr(p, "projected_points", None)
+    if proj is None:
+        # Some ESPN weeks don’t return projections for all lineups
+        proj = 0.0
+        include_delta = False
+    line = f"{name} ({pos}): {pts:.1f}"
+    if include_delta:
+        delta = pts - proj
+        line += f" (proj {proj:.1f}, Δ{delta:+.1f})"
+    return line
+
+
+def summarize_lineup(lineup, top_n=3, under_n=3):
+    """
+    Return (top, under) lists of strings:
+      - top: highest points
+      - under: worst delta (actual - projected)
+    """
+    players = []
+    for p in lineup or []:
+        # Filter out empty slots / None
+        if not p:
+            continue
+        pts = getattr(p, "points", 0.0) or 0.0
+        proj = getattr(p, "projected_points", 0.0) or 0.0
+        delta = pts - proj
+        players.append((p, pts, proj, delta))
+
+    if not players:
+        return [], []
+
+    # Top by raw points
+    top_sorted = sorted(players, key=lambda x: x[1], reverse=True)[:top_n]
+    top = [_player_line(p, include_delta=True) for (p, _, __, ___) in top_sorted]
+
+    # Underperformers by delta (most negative)
+    under_sorted = sorted(players, key=lambda x: x[3])[:under_n]
+    under = [_player_line(p, include_delta=True) for (p, _, __, ___) in under_sorted]
+
+    return top, under
+
+
 # ---------------- Build structured newsletter data ---------------- #
 
 def build_structured(league, week) -> Dict[str, Any]:
@@ -68,7 +117,7 @@ def build_structured(league, week) -> Dict[str, Any]:
     quick_hits: List[str] = []
     results_rows: List[List[str]] = [["Home", "Score", "Away", "Score", "Winner"]]
     standings_rows: List[List[str]] = [["#", "Team", "Record", "PF", "PA"]]
-    team_sections: List[Tuple[str, str]] = []  # [(team_name, recap_paragraph)]
+    team_sections: List[Dict[str, Any]] = []  # [{team, recap, top, under}]
 
     # Quick hits + results
     if boxes:
@@ -104,11 +153,16 @@ def build_structured(league, week) -> Dict[str, Any]:
     for i, (name, w, l, pf, pa) in enumerate(standings, start=1):
         standings_rows.append([str(i), name, f"{w}-{l}", f"{pf}", f"{pa}"])
 
-    # Team recaps (OpenAI)
-    def recap_for_team(team_name, opp_name, team_pts, opp_pts, mascot_desc):
+    # Team recaps (OpenAI) + player lists
+    def recap_for_team(team_name, opp_name, team_pts, opp_pts, mascot_desc, top_lines, under_lines):
+        # If mascot missing, make it explicit (so you can spot it and fill the file)
+        if not mascot_desc or mascot_desc == "—":
+            mascot_desc = "no mascot set yet"
+
         system = (
-            "You write fun, factual weekly fantasy football recaps. "
-            "Tone: witty but respectful; 90–130 words; PG language."
+            "You are the editor of the Gridiron Gazette, writing fun, factual weekly fantasy recaps. "
+            "Tone: witty but respectful; 90–130 words; PG language. "
+            "Use the player bullet suggestions to weave 1–2 names naturally into the recap."
         )
         user = f"""
 Team: {team_name}
@@ -116,7 +170,13 @@ Opponent: {opp_name}
 Final score: {team_pts}–{opp_pts} ({'win' if team_pts>opp_pts else ('loss' if team_pts<opp_pts else 'tie')})
 Mascot persona: {mascot_desc}
 
-Write a short recap addressed to {team_name} fans. Include the final score and one observation that follows from the score (no invented stats beyond the score). End with "Next week focus:" and one sentence.
+Top performers (suggested to reference):
+- {("\n- ".join(top_lines)) if top_lines else "None available"}
+
+Underperformers (do not roast, just light accountability):
+- {("\n- ".join(under_lines)) if under_lines else "None available"}
+
+Write a short recap addressed to {team_name} fans. Include the final score and one observation that follows from the score (no invented stats beyond the score). Mention 1–2 players by name from the lists above. End with "Next week focus:" and one sentence.
 """.strip()
 
         resp = client.responses.create(
@@ -132,12 +192,19 @@ Write a short recap addressed to {team_name} fans. Include the final score and o
         for b in boxes:
             h_name, a_name = safe_team_name(b.home_team), safe_team_name(b.away_team)
             hs, as_ = round(b.home_score or 0, 2), round(b.away_score or 0, 2)
+
+            # Lineups: home then away (espn_api exposes .home_lineup / .away_lineup on box score)
+            h_top, h_under = summarize_lineup(getattr(b, "home_lineup", []))
+            a_top, a_under = summarize_lineup(getattr(b, "away_lineup", []))
+
             h_mascot = team_mascots.get(h_name, "—")
             a_mascot = team_mascots.get(a_name, "—")
-            h_recap = recap_for_team(h_name, a_name, hs, as_, h_mascot)
-            a_recap = recap_for_team(a_name, h_name, as_, hs, a_mascot)
-            team_sections.append((h_name, f"Mascot: {h_mascot}\n\n{h_recap}"))
-            team_sections.append((a_name, f"Mascot: {a_mascot}\n\n{a_recap}"))
+
+            h_recap = recap_for_team(h_name, a_name, hs, as_, h_mascot, h_top, h_under)
+            a_recap = recap_for_team(a_name, h_name, as_, hs, a_mascot, a_top, a_under)
+
+            team_sections.append({"team": h_name, "recap": h_recap, "top": h_top, "under": h_under})
+            team_sections.append({"team": a_name, "recap": a_recap, "top": a_top, "under": a_under})
 
     return {
         "title": title,
@@ -150,7 +217,7 @@ Write a short recap addressed to {team_name} fans. Include the final score and o
     }
 
 
-# ---------------- Google Docs helpers (append-safe writer + backoff) ---------------- #
+# ---------------- Google Docs helpers (append-safe + backoff) ---------------- #
 
 def docs_client():
     scopes = [
@@ -162,10 +229,7 @@ def docs_client():
 
 
 def docs_call(docs, method: str, **kwargs):
-    """
-    Wrapper with retry/backoff for batchUpdate-heavy calls.
-    method: 'get' or 'batchUpdate'
-    """
+    """Retry/backoff wrapper for Docs API calls."""
     max_retries = 6
     base = 0.8
     for attempt in range(max_retries):
@@ -173,25 +237,22 @@ def docs_call(docs, method: str, **kwargs):
             if method == "get":
                 return docs.documents().get(**kwargs).execute()
             elif method == "batchUpdate":
-                # One write request; keep under per-minute limit with a tiny delay after success
                 resp = docs.documents().batchUpdate(**kwargs).execute()
                 time.sleep(0.25)  # soft pacing
                 return resp
             else:
                 raise ValueError("Unsupported docs method")
         except HttpError as e:
-            # 429 / 5xx -> backoff
             status = getattr(e, "status_code", None) or getattr(e.resp, "status", None)
             if status in (429, 500, 502, 503, 504):
                 delay = base * (2 ** attempt) + random.uniform(0, 0.4)
-                print(f"⚠️ Docs API {status} — retrying in {delay:.2f}s (attempt {attempt+1}/{max_retries})")
+                print(f"⚠️ Docs API {status} — retry in {delay:.2f}s (attempt {attempt+1}/{max_retries})")
                 time.sleep(delay)
                 continue
             raise
 
 
 def _end_insert_index(docs, doc_id: str) -> int:
-    """Return a safe index to append new content: just before the final newline."""
     doc = docs_call(docs, "get", documentId=doc_id)
     body = doc.get("body", {}).get("content", []) or []
     end_index = (body[-1].get("endIndex", 1) if body else 1)
@@ -199,7 +260,6 @@ def _end_insert_index(docs, doc_id: str) -> int:
 
 
 def clear_doc_preserving_final_newline(docs, doc_id: str):
-    """Delete all content except the final newline (avoid API error)."""
     doc = docs_call(docs, "get", documentId=doc_id)
     body = doc.get("body", {}).get("content", []) or []
     end_index = (body[-1].get("endIndex", 1) if body else 1)
@@ -212,8 +272,7 @@ def clear_doc_preserving_final_newline(docs, doc_id: str):
         )
 
 
-def insert_paragraph(docs, doc_id: str, _ignored_index: int, text: str, named_style: str = None, bold: bool = False):
-    """Append a paragraph at the end (safe index), with optional named style and bold."""
+def insert_paragraph(docs, doc_id: str, text: str, named_style: str = None, bold: bool = False):
     index = _end_insert_index(docs, doc_id)
     reqs = [{"insertText": {"location": {"index": index}, "text": text + "\n"}}]
     if named_style or bold:
@@ -235,19 +294,15 @@ def insert_paragraph(docs, doc_id: str, _ignored_index: int, text: str, named_st
                 }
             })
     docs_call(docs, "batchUpdate", documentId=doc_id, body={"requests": reqs})
-    return _end_insert_index(docs, doc_id) + 1  # dummy next cursor
 
 
-def insert_bullets(docs, doc_id: str, _ignored_index: int, items: List[str]):
-    """Append a bulleted list safely at the end of the doc (single write)."""
+def insert_bullets(docs, doc_id: str, items: List[str]):
     start = _end_insert_index(docs, doc_id)
-    # Build one big batchUpdate: insert all lines, then convert to bullets
     reqs = []
     running_index = start
     for it in items:
         reqs.append({"insertText": {"location": {"index": running_index}, "text": it + "\n"}})
         running_index += len(it) + 1
-    # Apply bullets over the block we just inserted
     reqs.append({
         "createParagraphBullets": {
             "range": {"startIndex": start, "endIndex": running_index},
@@ -255,25 +310,19 @@ def insert_bullets(docs, doc_id: str, _ignored_index: int, items: List[str]):
         }
     })
     docs_call(docs, "batchUpdate", documentId=doc_id, body={"requests": reqs})
-    return running_index
 
 
-def insert_table(docs, doc_id: str, _ignored_index: int, rows: List[List[str]]):
-    """Append a real table at the end and populate cells; returns new end cursor."""
+def insert_table(docs, doc_id: str, rows: List[List[str]]):
     if not rows:
-        return _end_insert_index(docs, doc_id)
+        return
     n_rows = len(rows)
     n_cols = max(len(r) for r in rows)
-
     table_start = _end_insert_index(docs, doc_id)
-    # Insert table at a safe end position
     docs_call(
         docs, "batchUpdate",
         documentId=doc_id,
         body={"requests": [{"insertTable": {"rows": n_rows, "columns": n_cols, "location": {"index": table_start}}}]},
     )
-
-    # Fill cells in a single batch
     reqs = []
     for r, row in enumerate(rows):
         for c in range(n_cols):
@@ -281,7 +330,7 @@ def insert_table(docs, doc_id: str, _ignored_index: int, rows: List[List[str]]):
             reqs.append({
                 "insertText": {
                     "text": text,
-                    "location": {"index": 0},  # ignored when tableCellLocation is set
+                    "location": {"index": 0},
                     "tableCellLocation": {
                         "tableStartLocation": {"index": table_start},
                         "rowIndex": r,
@@ -291,9 +340,7 @@ def insert_table(docs, doc_id: str, _ignored_index: int, rows: List[List[str]]):
             })
     if reqs:
         docs_call(docs, "batchUpdate", documentId=doc_id, body={"requests": reqs})
-
-    # Spacer line after table (single write)
-    return insert_paragraph(docs, doc_id, table_start, "")
+    insert_paragraph(docs, doc_id, "")  # spacer
 
 
 def write_formatted_doc(data: Dict[str, Any]):
@@ -307,52 +354,52 @@ def write_formatted_doc(data: Dict[str, Any]):
     docs = docs_client()
     doc_id = GDRIVE_DOC_ID
 
-    # Clear previous content safely (keep final newline)
     clear_doc_preserving_final_newline(docs, doc_id)
 
-    # Build top->down (append-safe helpers ignore the incoming index)
-    cursor = 1
-    cursor = insert_paragraph(docs, doc_id, cursor, data["title"], named_style="TITLE")
-    cursor = insert_paragraph(docs, doc_id, cursor, data["subtitle"], named_style="SUBTITLE")
-    cursor = insert_paragraph(docs, doc_id, cursor, "")  # spacer
+    insert_paragraph(docs, doc_id, data["title"], named_style="TITLE")
+    insert_paragraph(docs, doc_id, data["subtitle"], named_style="SUBTITLE")
+    insert_paragraph(docs, doc_id, "")  # spacer
 
-    # Quick Hits
     if data["quick_hits"]:
-        cursor = insert_paragraph(docs, doc_id, cursor, "Quick Hits", named_style="HEADING_2")
-        cursor = insert_bullets(docs, doc_id, cursor, data["quick_hits"])
-        cursor = insert_paragraph(docs, doc_id, cursor, "")  # spacer
+        insert_paragraph(docs, doc_id, "Quick Hits", named_style="HEADING_2")
+        insert_bullets(docs, doc_id, data["quick_hits"])
+        insert_paragraph(docs, doc_id, "")
 
-    # Results table (with fallback to text rows)
     if data["results_rows"] and len(data["results_rows"]) > 1:
-        cursor = insert_paragraph(docs, doc_id, cursor, "This Week’s Results", named_style="HEADING_2")
+        insert_paragraph(docs, doc_id, "This Week’s Results", named_style="HEADING_2")
         try:
-            cursor = insert_table(docs, doc_id, cursor, data["results_rows"])
-        except HttpError as e:
-            cursor = insert_paragraph(docs, doc_id, cursor, "(table unavailable — fallback)")
+            insert_table(docs, doc_id, data["results_rows"])
+        except HttpError:
+            insert_paragraph(docs, doc_id, "(table unavailable — fallback)")
             for row in data["results_rows"]:
-                cursor = insert_paragraph(docs, doc_id, cursor, "   ".join(row))
-            cursor = insert_paragraph(docs, doc_id, cursor, "")
+                insert_paragraph(docs, doc_id, "   ".join(row))
+            insert_paragraph(docs, doc_id, "")
 
-    # Standings table (with fallback)
     if data["standings_rows"] and len(data["standings_rows"]) > 1:
-        cursor = insert_paragraph(docs, doc_id, cursor, "Standings Snapshot", named_style="HEADING_2")
+        insert_paragraph(docs, doc_id, "Standings Snapshot", named_style="HEADING_2")
         try:
-            cursor = insert_table(docs, doc_id, cursor, data["standings_rows"])
-        except HttpError as e:
-            cursor = insert_paragraph(docs, doc_id, cursor, "(table unavailable — fallback)")
+            insert_table(docs, doc_id, data["standings_rows"])
+        except HttpError:
+            insert_paragraph(docs, doc_id, "(table unavailable — fallback)")
             for row in data["standings_rows"]:
-                cursor = insert_paragraph(docs, doc_id, cursor, "   ".join(row))
-            cursor = insert_paragraph(docs, doc_id, cursor, "")
+                insert_paragraph(docs, doc_id, "   ".join(row))
+            insert_paragraph(docs, doc_id, "")
 
-    # Team Recaps
     if data["team_sections"]:
-        cursor = insert_paragraph(docs, doc_id, cursor, "Team Recaps", named_style="HEADING_2")
-        for team_name, recap_text in data["team_sections"]:
-            cursor = insert_paragraph(docs, doc_id, cursor, team_name, named_style="HEADING_3")
-            cursor = insert_paragraph(docs, doc_id, cursor, recap_text)
-            cursor = insert_paragraph(docs, doc_id, cursor, "")  # spacer
+        insert_paragraph(docs, doc_id, "Team Recaps", named_style="HEADING_2")
+        for sec in data["team_sections"]:
+            insert_paragraph(docs, doc_id, sec["team"], named_style="HEADING_3")
+            insert_paragraph(docs, doc_id, sec["recap"])
+            # Add player bullets right under the recap
+            if sec["top"]:
+                insert_paragraph(docs, doc_id, "Top performers", named_style="HEADING_4")
+                insert_bullets(docs, doc_id, sec["top"])
+            if sec["under"]:
+                insert_paragraph(docs, doc_id, "Underperformers", named_style="HEADING_4")
+                insert_bullets(docs, doc_id, sec["under"])
+            insert_paragraph(docs, doc_id, "")  # spacer
 
-    print("✅ Google Doc updated (styled headings, bullets, and tables).")
+    print("✅ Google Doc updated (styled headings, bullets, tables, and player sections).")
 
 
 # ---------------- Main ---------------- #
@@ -379,7 +426,7 @@ if __name__ == "__main__":
         "LEAGUE_ID",
         "YEAR",
         "GOOGLE_APPLICATION_CREDENTIALS",
-        "GDRIVE_DOC_ID",  # required
+        "GDRIVE_DOC_ID",
     ]
     missing = [k for k in required if not os.getenv(k)]
     if missing:
