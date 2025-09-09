@@ -132,7 +132,7 @@ def upsert_weekly_gdoc(content, week):
 
     title = f"Gridiron Gazette — Week {week}"
     safe_title = title.replace("'", "\\'")
-query = (
+    query = (
     "mimeType='application/vnd.google-apps.document' and "
     f"name='{safe_title}' and "
     f"'{GDRIVE_FOLDER_ID}' in parents and trashed=false"
