@@ -167,8 +167,11 @@ def build_newsletter(league, week):
 
 def upsert_weekly_gdoc(content, week):
     """
-    Update an existing Google Doc. We REQUIRE GDRIVE_DOC_ID to avoid SA create-quota.
-    Fix: when clearing content, delete up to endIndex-1 to avoid the trailing newline error.
+    Update an existing Google Doc (requires GDRIVE_DOC_ID).
+    Robust approach:
+      1) insert content at index 1,
+      2) delete everything AFTER the inserted content,
+    so we never try to delete the trailing newline at the end of the doc.
     """
     if not GDRIVE_DOC_ID:
         raise SystemExit(
@@ -186,33 +189,9 @@ def upsert_weekly_gdoc(content, week):
     )
     docs = build("docs", "v1", credentials=creds)
 
-    # Read current doc to get endIndex
-    doc = docs.documents().get(documentId=GDRIVE_DOC_ID).execute()
-    body = doc.get("body", {}).get("content", []) or []
-    end_index = (body[-1].get("endIndex", 1) if body else 1)
-
-    # Clear (but DON'T include the trailing newline at end of segment)
-    # Only clear when there's actually content beyond the initial newline.
-    # Google Docs usually starts with a single newline (index 1..2).
-    clear_requests = []
-    clear_to = max(1, int(end_index) - 1)  # stop one char before the final newline
-    if clear_to > 1:
-        clear_requests.append({
-            "deleteContentRange": {
-                "range": {
-                    "startIndex": 1,
-                    "endIndex": clear_to
-                }
-            }
-        })
-
-    if clear_requests:
-        docs.documents().batchUpdate(
-            documentId=GDRIVE_DOC_ID,
-            body={"requests": clear_requests},
-        ).execute()
-
-    # Insert fresh content at index 1
+    # 1) Insert fresh content at the top
+    # NOTE: Google Docs uses UTF-16 code units for indices. Our content is ASCII/UTF-8 Markdown; len() is OK here.
+    content_len = len(content)
     docs.documents().batchUpdate(
         documentId=GDRIVE_DOC_ID,
         body={"requests": [
@@ -220,8 +199,26 @@ def upsert_weekly_gdoc(content, week):
         ]},
     ).execute()
 
-    print("✅ Google Doc updated (using GDRIVE_DOC_ID).")
+    # 2) Delete everything AFTER the inserted content
+    # Get updated endIndex after the insert
+    doc = docs.documents().get(documentId=GDRIVE_DOC_ID).execute()
+    body = doc.get("body", {}).get("content", []) or []
+    end_index = (body[-1].get("endIndex", 1) if body else 1)
 
+    # Start deleting right after what we inserted
+    delete_start = 1 + content_len
+    # Stop before the final newline: subtract 1 to avoid the trailing newline restriction
+    delete_end = max(delete_start, int(end_index) - 1)
+
+    if delete_end > delete_start:
+        docs.documents().batchUpdate(
+            documentId=GDRIVE_DOC_ID,
+            body={"requests": [
+                {"deleteContentRange": {"range": {"startIndex": delete_start, "endIndex": delete_end}}}
+            ]},
+        ).execute()
+
+    print("✅ Google Doc updated (insert-then-trim method).")
 def main():
     league = connect_league()
     week = int(WEEK_OVERRIDE) if WEEK_OVERRIDE else getattr(league, "current_week", 1)
