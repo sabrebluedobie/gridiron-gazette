@@ -1,6 +1,6 @@
 # weekly_recap.py
-# Gridiron Gazette — ESPN -> OpenAI recaps -> STYLED Google Doc (no plain MD)
-# Requires: OPENAI_API_KEY, LEAGUE_ID, YEAR, GOOGLE_APPLICATION_CREDENTIALS, GDRIVE_DOC_ID
+# Gridiron Gazette — ESPN -> OpenAI recaps -> STYLED Google Doc
+# Requires GitHub Secrets/env: OPENAI_API_KEY, LEAGUE_ID, YEAR, GOOGLE_APPLICATION_CREDENTIALS, GDRIVE_DOC_ID
 # Optional (private leagues): ESPN_S2, SWID
 
 import os
@@ -12,6 +12,7 @@ from espn_api.football import League
 from openai import OpenAI
 
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from google.oauth2 import service_account
 
 from team_mascots import team_mascots
@@ -23,7 +24,7 @@ YEAR = int(os.getenv("YEAR", dt.datetime.now().year))
 WEEK_OVERRIDE = os.getenv("WEEK")  # optional override like WEEK=1
 
 # Google / Drive
-GDRIVE_DOC_ID = os.getenv("GDRIVE_DOC_ID")  # REQUIRED: we update this Doc
+GDRIVE_DOC_ID = os.getenv("GDRIVE_DOC_ID")  # REQUIRED: update this Doc
 GOOGLE_CREDS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
 # ESPN cookies (only if league is private)
@@ -42,11 +43,14 @@ def connect_league():
 
 
 def safe_team_name(team):
+    """Robust team name getter with fallback."""
     try:
         return team.team_name
     except Exception:
         return f"{getattr(team, 'location', '').strip()} {getattr(team, 'nickname', '').strip()}".strip()
 
+
+# ---------------- Build structured newsletter data ---------------- #
 
 def build_structured(league, week) -> Dict[str, Any]:
     """Return structured data for formatted Google Doc."""
@@ -57,7 +61,7 @@ def build_structured(league, week) -> Dict[str, Any]:
     quick_hits: List[str] = []
     results_rows: List[List[str]] = [["Home", "Score", "Away", "Score", "Winner"]]
     standings_rows: List[List[str]] = [["#", "Team", "Record", "PF", "PA"]]
-    team_sections: List[Tuple[str, str]] = []  # [(team_heading, recap_text)]
+    team_sections: List[Tuple[str, str]] = []  # [(team_name, recap_paragraph)]
 
     # Quick hits + results
     if boxes:
@@ -93,7 +97,7 @@ def build_structured(league, week) -> Dict[str, Any]:
     for i, (name, w, l, pf, pa) in enumerate(standings, start=1):
         standings_rows.append([str(i), name, f"{w}-{l}", f"{pf}", f"{pa}"])
 
-    # Team recaps
+    # Team recaps (OpenAI)
     def recap_for_team(team_name, opp_name, team_pts, opp_pts, mascot_desc):
         system = (
             "You write fun, factual weekly fantasy football recaps. "
@@ -125,8 +129,8 @@ Write a short recap addressed to {team_name} fans. Include the final score and o
             a_mascot = team_mascots.get(a_name, "—")
             h_recap = recap_for_team(h_name, a_name, hs, as_, h_mascot)
             a_recap = recap_for_team(a_name, h_name, as_, hs, a_mascot)
-            team_sections.append((h_name, f"**Mascot:** {h_mascot}\n\n{h_recap}"))
-            team_sections.append((a_name, f"**Mascot:** {a_mascot}\n\n{a_recap}"))
+            team_sections.append((h_name, f"Mascot: {h_mascot}\n\n{h_recap}"))
+            team_sections.append((a_name, f"Mascot: {a_mascot}\n\n{a_recap}"))
 
     return {
         "title": title,
@@ -139,7 +143,7 @@ Write a short recap addressed to {team_name} fans. Include the final score and o
     }
 
 
-# ---------------- Google Docs writer (styled) ---------------- #
+# ---------------- Google Docs helpers (styled writer) ---------------- #
 
 def docs_client():
     scopes = [
@@ -164,9 +168,9 @@ def clear_doc_preserving_final_newline(docs, doc_id: str):
 
 
 def insert_paragraph(docs, doc_id: str, index: int, text: str, named_style: str = None, bold: bool = False):
+    """Insert a paragraph at index with optional named style and bold."""
     reqs = [{"insertText": {"location": {"index": index}, "text": text + "\n"}}]
     if named_style or bold:
-        # Apply paragraph or text styles over the entire inserted paragraph (minus final newline)
         length = len(text)
         if named_style:
             reqs.append({
@@ -185,45 +189,47 @@ def insert_paragraph(docs, doc_id: str, index: int, text: str, named_style: str 
                 }
             })
     docs.documents().batchUpdate(documentId=doc_id, body={"requests": reqs}).execute()
-    return index + len(text) + 1  # new cursor
+    return index + len(text) + 1  # next cursor
 
 
 def insert_bullets(docs, doc_id: str, index: int, items: List[str]):
-    # Insert all lines, then convert to a bulleted list
+    """Insert a bulleted list starting at index; returns new cursor."""
     start = index
     for it in items:
         index = insert_paragraph(docs, doc_id, index, it)
-    # Apply bullets across the range we just inserted
     docs.documents().batchUpdate(
         documentId=doc_id,
-        body={"requests": [{"createParagraphBullets": {"range": {"startIndex": start, "endIndex": index}, "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE"}}]},
+        body={"requests": [{"createParagraphBullets": {
+            "range": {"startIndex": start, "endIndex": index},
+            "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE"
+        }}]},
     ).execute()
     return index
 
 
 def insert_table(docs, doc_id: str, index: int, rows: List[List[str]]):
-    """Insert a real table and populate cells."""
+    """Insert a real table and populate cells. Returns new cursor index after a blank line."""
     if not rows:
         return index
     n_rows = len(rows)
     n_cols = max(len(r) for r in rows)
-    # 1) Insert table
+
+    # 1) Insert table at index
     docs.documents().batchUpdate(
         documentId=doc_id,
         body={"requests": [{"insertTable": {"rows": n_rows, "columns": n_cols, "location": {"index": index}}}]},
     ).execute()
-    # After insertion, Google creates the structure at that index; we can target cells by tableStartLocation
     table_start = index
-    # 2) Fill cells
-    requests = []
+
+    # 2) Fill every cell
+    reqs = []
     for r, row in enumerate(rows):
-        for c, cell_text in enumerate(row):
-            if cell_text is None:
-                cell_text = ""
-            requests.append({
+        for c in range(n_cols):
+            text = (row[c] if c < len(row) else "") or ""
+            reqs.append({
                 "insertText": {
-                    "text": cell_text,
-                    "location": {"index": 0},  # ignored when using tableCellLocation
+                    "text": text,
+                    "location": {"index": 0},  # ignored when tableCellLocation is used
                     "tableCellLocation": {
                         "tableStartLocation": {"index": table_start},
                         "rowIndex": r,
@@ -231,12 +237,15 @@ def insert_table(docs, doc_id: str, index: int, rows: List[List[str]]):
                     }
                 }
             })
-    docs.documents().batchUpdate(documentId=doc_id, body={"requests": requests}).execute()
-    # Leave a blank line after table
-    return insert_paragraph(docs, doc_id, table_start, "")  # returns next index after blank line
+    if reqs:
+        docs.documents().batchUpdate(documentId=doc_id, body={"requests": reqs}).execute()
+
+    # 3) Spacer line after table
+    return insert_paragraph(docs, doc_id, table_start, "")
 
 
 def write_formatted_doc(data: Dict[str, Any]):
+    """Build a fully-styled Google Doc for the week."""
     if not GDRIVE_DOC_ID:
         raise SystemExit(
             "GDRIVE_DOC_ID is missing. Create a Doc in Drive, share with the bot as Editor, "
@@ -246,11 +255,11 @@ def write_formatted_doc(data: Dict[str, Any]):
     docs = docs_client()
     doc_id = GDRIVE_DOC_ID
 
-    # 0) Clear previous content safely
+    # Clear previous content safely (keep final newline)
     clear_doc_preserving_final_newline(docs, doc_id)
 
-    # 1) Build the document top->down
-    cursor = 1  # start after doc start
+    # Build top->down
+    cursor = 1
     cursor = insert_paragraph(docs, doc_id, cursor, data["title"], named_style="TITLE")
     cursor = insert_paragraph(docs, doc_id, cursor, data["subtitle"], named_style="SUBTITLE")
     cursor = insert_paragraph(docs, doc_id, cursor, "")  # spacer
@@ -261,22 +270,33 @@ def write_formatted_doc(data: Dict[str, Any]):
         cursor = insert_bullets(docs, doc_id, cursor, data["quick_hits"])
         cursor = insert_paragraph(docs, doc_id, cursor, "")  # spacer
 
-    # Results table
+    # Results table (with fallback to text rows)
     if data["results_rows"] and len(data["results_rows"]) > 1:
         cursor = insert_paragraph(docs, doc_id, cursor, "This Week’s Results", named_style="HEADING_2")
-        cursor = insert_table(docs, doc_id, cursor, data["results_rows"])
+        try:
+            cursor = insert_table(docs, doc_id, cursor, data["results_rows"])
+        except HttpError as e:
+            # Fallback: simple paragraphs if table insertion ever fails
+            cursor = insert_paragraph(docs, doc_id, cursor, "(table unavailable — fallback)", named_style="NORMAL_TEXT")
+            for row in data["results_rows"]:
+                cursor = insert_paragraph(docs, doc_id, cursor, "   ".join(row))
+            cursor = insert_paragraph(docs, doc_id, cursor, "")
 
-    # Standings table
+    # Standings table (with fallback)
     if data["standings_rows"] and len(data["standings_rows"]) > 1:
         cursor = insert_paragraph(docs, doc_id, cursor, "Standings Snapshot", named_style="HEADING_2")
-        cursor = insert_table(docs, doc_id, cursor, data["standings_rows"])
+        try:
+            cursor = insert_table(docs, doc_id, cursor, data["standings_rows"])
+        except HttpError as e:
+            cursor = insert_paragraph(docs, doc_id, cursor, "(table unavailable — fallback)", named_style="NORMAL_TEXT")
+            for row in data["standings_rows"]:
+                cursor = insert_paragraph(docs, doc_id, cursor, "   ".join(row))
+            cursor = insert_paragraph(docs, doc_id, cursor, "")
 
     # Team Recaps
     if data["team_sections"]:
         cursor = insert_paragraph(docs, doc_id, cursor, "Team Recaps", named_style="HEADING_2")
-        for team_name, recap_md in data["team_sections"]:
-            # Minimal inline cleanup: strip **…** around "Mascot:"
-            recap_text = recap_md.replace("**Mascot:**", "Mascot:")
+        for team_name, recap_text in data["team_sections"]:
             cursor = insert_paragraph(docs, doc_id, cursor, team_name, named_style="HEADING_3")
             cursor = insert_paragraph(docs, doc_id, cursor, recap_text)
             cursor = insert_paragraph(docs, doc_id, cursor, "")  # spacer
@@ -291,12 +311,11 @@ def main():
     week = int(WEEK_OVERRIDE) if WEEK_OVERRIDE else getattr(league, "current_week", 1)
     data = build_structured(league, week)
 
-    # also save a text copy locally (optional)
+    # also save a text copy locally (optional artifact)
     outdir = pathlib.Path(f"recaps/week_{week}")
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "newsletter.md").write_text(
-        f"{data['title']}\n{data['subtitle']}\n\n" + "\n".join(data.get("quick_hits", [])),
-        encoding="utf-8",
+        f"{data['title']}\n{data['subtitle']}\n", encoding="utf-8"
     )
 
     write_formatted_doc(data)
