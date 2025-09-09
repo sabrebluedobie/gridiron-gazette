@@ -1,5 +1,5 @@
 # weekly_recap.py
-# Gridiron Gazette — ESPN -> OpenAI recaps -> STYLED Google Doc (append-safe)
+# Gridiron Gazette — ESPN -> OpenAI recaps -> STYLED Google Doc (append-safe + backoff)
 #
 # Requires GitHub Secrets/env:
 #   OPENAI_API_KEY, LEAGUE_ID, YEAR, GOOGLE_APPLICATION_CREDENTIALS, GDRIVE_DOC_ID
@@ -9,6 +9,8 @@
 # The Google Doc with id GDRIVE_DOC_ID must be shared with your service account as Editor.
 
 import os
+import time
+import random
 import pathlib
 import datetime as dt
 from typing import List, Tuple, Dict, Any
@@ -148,7 +150,7 @@ Write a short recap addressed to {team_name} fans. Include the final score and o
     }
 
 
-# ---------------- Google Docs helpers (append-safe writer) ---------------- #
+# ---------------- Google Docs helpers (append-safe writer + backoff) ---------------- #
 
 def docs_client():
     scopes = [
@@ -159,26 +161,55 @@ def docs_client():
     return build("docs", "v1", credentials=creds)
 
 
+def docs_call(docs, method: str, **kwargs):
+    """
+    Wrapper with retry/backoff for batchUpdate-heavy calls.
+    method: 'get' or 'batchUpdate'
+    """
+    max_retries = 6
+    base = 0.8
+    for attempt in range(max_retries):
+        try:
+            if method == "get":
+                return docs.documents().get(**kwargs).execute()
+            elif method == "batchUpdate":
+                # One write request; keep under per-minute limit with a tiny delay after success
+                resp = docs.documents().batchUpdate(**kwargs).execute()
+                time.sleep(0.25)  # soft pacing
+                return resp
+            else:
+                raise ValueError("Unsupported docs method")
+        except HttpError as e:
+            # 429 / 5xx -> backoff
+            status = getattr(e, "status_code", None) or getattr(e.resp, "status", None)
+            if status in (429, 500, 502, 503, 504):
+                delay = base * (2 ** attempt) + random.uniform(0, 0.4)
+                print(f"⚠️ Docs API {status} — retrying in {delay:.2f}s (attempt {attempt+1}/{max_retries})")
+                time.sleep(delay)
+                continue
+            raise
+
+
 def _end_insert_index(docs, doc_id: str) -> int:
     """Return a safe index to append new content: just before the final newline."""
-    doc = docs.documents().get(documentId=doc_id).execute()
+    doc = docs_call(docs, "get", documentId=doc_id)
     body = doc.get("body", {}).get("content", []) or []
     end_index = (body[-1].get("endIndex", 1) if body else 1)
-    # Insert before the trailing newline to avoid range/grapheme errors
     return max(1, int(end_index) - 1)
 
 
 def clear_doc_preserving_final_newline(docs, doc_id: str):
     """Delete all content except the final newline (avoid API error)."""
-    doc = docs.documents().get(documentId=doc_id).execute()
+    doc = docs_call(docs, "get", documentId=doc_id)
     body = doc.get("body", {}).get("content", []) or []
     end_index = (body[-1].get("endIndex", 1) if body else 1)
     clear_to = max(1, int(end_index) - 1)
     if clear_to > 1:
-        docs.documents().batchUpdate(
+        docs_call(
+            docs, "batchUpdate",
             documentId=doc_id,
             body={"requests": [{"deleteContentRange": {"range": {"startIndex": 1, "endIndex": clear_to}}}]},
-        ).execute()
+        )
 
 
 def insert_paragraph(docs, doc_id: str, _ignored_index: int, text: str, named_style: str = None, bold: bool = False):
@@ -203,24 +234,28 @@ def insert_paragraph(docs, doc_id: str, _ignored_index: int, text: str, named_st
                     "fields": "bold"
                 }
             })
-    docs.documents().batchUpdate(documentId=doc_id, body={"requests": reqs}).execute()
+    docs_call(docs, "batchUpdate", documentId=doc_id, body={"requests": reqs})
     return _end_insert_index(docs, doc_id) + 1  # dummy next cursor
 
 
 def insert_bullets(docs, doc_id: str, _ignored_index: int, items: List[str]):
-    """Append a bulleted list safely at the end of the doc."""
+    """Append a bulleted list safely at the end of the doc (single write)."""
     start = _end_insert_index(docs, doc_id)
+    # Build one big batchUpdate: insert all lines, then convert to bullets
+    reqs = []
+    running_index = start
     for it in items:
-        insert_paragraph(docs, doc_id, start, it)
-    end = _end_insert_index(docs, doc_id) + 1  # range end is exclusive
-    docs.documents().batchUpdate(
-        documentId=doc_id,
-        body={"requests": [{"createParagraphBullets": {
-            "range": {"startIndex": start, "endIndex": end},
+        reqs.append({"insertText": {"location": {"index": running_index}, "text": it + "\n"}})
+        running_index += len(it) + 1
+    # Apply bullets over the block we just inserted
+    reqs.append({
+        "createParagraphBullets": {
+            "range": {"startIndex": start, "endIndex": running_index},
             "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE"
-        }}]},
-    ).execute()
-    return end
+        }
+    })
+    docs_call(docs, "batchUpdate", documentId=doc_id, body={"requests": reqs})
+    return running_index
 
 
 def insert_table(docs, doc_id: str, _ignored_index: int, rows: List[List[str]]):
@@ -232,12 +267,13 @@ def insert_table(docs, doc_id: str, _ignored_index: int, rows: List[List[str]]):
 
     table_start = _end_insert_index(docs, doc_id)
     # Insert table at a safe end position
-    docs.documents().batchUpdate(
+    docs_call(
+        docs, "batchUpdate",
         documentId=doc_id,
         body={"requests": [{"insertTable": {"rows": n_rows, "columns": n_cols, "location": {"index": table_start}}}]},
-    ).execute()
+    )
 
-    # Fill cells
+    # Fill cells in a single batch
     reqs = []
     for r, row in enumerate(rows):
         for c in range(n_cols):
@@ -254,9 +290,9 @@ def insert_table(docs, doc_id: str, _ignored_index: int, rows: List[List[str]]):
                 }
             })
     if reqs:
-        docs.documents().batchUpdate(documentId=doc_id, body={"requests": reqs}).execute()
+        docs_call(docs, "batchUpdate", documentId=doc_id, body={"requests": reqs})
 
-    # Spacer line after table
+    # Spacer line after table (single write)
     return insert_paragraph(docs, doc_id, table_start, "")
 
 
@@ -291,7 +327,7 @@ def write_formatted_doc(data: Dict[str, Any]):
         cursor = insert_paragraph(docs, doc_id, cursor, "This Week’s Results", named_style="HEADING_2")
         try:
             cursor = insert_table(docs, doc_id, cursor, data["results_rows"])
-        except HttpError:
+        except HttpError as e:
             cursor = insert_paragraph(docs, doc_id, cursor, "(table unavailable — fallback)")
             for row in data["results_rows"]:
                 cursor = insert_paragraph(docs, doc_id, cursor, "   ".join(row))
@@ -302,7 +338,7 @@ def write_formatted_doc(data: Dict[str, Any]):
         cursor = insert_paragraph(docs, doc_id, cursor, "Standings Snapshot", named_style="HEADING_2")
         try:
             cursor = insert_table(docs, doc_id, cursor, data["standings_rows"])
-        except HttpError:
+        except HttpError as e:
             cursor = insert_paragraph(docs, doc_id, cursor, "(table unavailable — fallback)")
             for row in data["standings_rows"]:
                 cursor = insert_paragraph(docs, doc_id, cursor, "   ".join(row))
