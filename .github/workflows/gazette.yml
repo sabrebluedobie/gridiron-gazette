@@ -25,12 +25,14 @@ jobs:
         run: echo '${{ secrets.GCP_CREDENTIALS }}' > creds.json
 
       - name: Generate & upload Gazette
-        env:
-          ***REMOVED***
-          LEAGUE_ID: ${{ secrets.LEAGUE_ID }}
-          YEAR: ${{ vars.YEAR || '2025' }}
-          GOOGLE_APPLICATION_CREDENTIALS: creds.json
-          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
-          ***REMOVED***
-          ***REMOVED***
+  env:
+    ***REMOVED***
+    LEAGUE_ID: ${{ secrets.LEAGUE_ID }}
+    YEAR: ${{ vars.YEAR || '2025' }}
+    GOOGLE_APPLICATION_CREDENTIALS: creds.json
+    GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+    GDRIVE_DOC_ID: ${{ secrets.GDRIVE_DOC_ID }}   # <= this
+    ***REMOVED***
+    ***REMOVED***
+  run: python weekly_recap.py
         run: python weekly_recap.py
