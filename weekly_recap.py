@@ -1,7 +1,12 @@
 # weekly_recap.py
-# Gridiron Gazette — ESPN -> OpenAI recaps -> STYLED Google Doc
-# Requires GitHub Secrets/env: OPENAI_API_KEY, LEAGUE_ID, YEAR, GOOGLE_APPLICATION_CREDENTIALS, GDRIVE_DOC_ID
-# Optional (private leagues): ESPN_S2, SWID
+# Gridiron Gazette — ESPN -> OpenAI recaps -> STYLED Google Doc (append-safe)
+#
+# Requires GitHub Secrets/env:
+#   OPENAI_API_KEY, LEAGUE_ID, YEAR, GOOGLE_APPLICATION_CREDENTIALS, GDRIVE_DOC_ID
+# Optional (private leagues):
+#   ESPN_S2, SWID
+#
+# The Google Doc with id GDRIVE_DOC_ID must be shared with your service account as Editor.
 
 import os
 import pathlib
@@ -143,7 +148,7 @@ Write a short recap addressed to {team_name} fans. Include the final score and o
     }
 
 
-# ---------------- Google Docs helpers (styled writer) ---------------- #
+# ---------------- Google Docs helpers (append-safe writer) ---------------- #
 
 def docs_client():
     scopes = [
@@ -152,6 +157,15 @@ def docs_client():
     ]
     creds = service_account.Credentials.from_service_account_file(GOOGLE_CREDS, scopes=scopes)
     return build("docs", "v1", credentials=creds)
+
+
+def _end_insert_index(docs, doc_id: str) -> int:
+    """Return a safe index to append new content: just before the final newline."""
+    doc = docs.documents().get(documentId=doc_id).execute()
+    body = doc.get("body", {}).get("content", []) or []
+    end_index = (body[-1].get("endIndex", 1) if body else 1)
+    # Insert before the trailing newline to avoid range/grapheme errors
+    return max(1, int(end_index) - 1)
 
 
 def clear_doc_preserving_final_newline(docs, doc_id: str):
@@ -167,8 +181,9 @@ def clear_doc_preserving_final_newline(docs, doc_id: str):
         ).execute()
 
 
-def insert_paragraph(docs, doc_id: str, index: int, text: str, named_style: str = None, bold: bool = False):
-    """Insert a paragraph at index with optional named style and bold."""
+def insert_paragraph(docs, doc_id: str, _ignored_index: int, text: str, named_style: str = None, bold: bool = False):
+    """Append a paragraph at the end (safe index), with optional named style and bold."""
+    index = _end_insert_index(docs, doc_id)
     reqs = [{"insertText": {"location": {"index": index}, "text": text + "\n"}}]
     if named_style or bold:
         length = len(text)
@@ -189,39 +204,40 @@ def insert_paragraph(docs, doc_id: str, index: int, text: str, named_style: str 
                 }
             })
     docs.documents().batchUpdate(documentId=doc_id, body={"requests": reqs}).execute()
-    return index + len(text) + 1  # next cursor
+    return _end_insert_index(docs, doc_id) + 1  # dummy next cursor
 
 
-def insert_bullets(docs, doc_id: str, index: int, items: List[str]):
-    """Insert a bulleted list starting at index; returns new cursor."""
-    start = index
+def insert_bullets(docs, doc_id: str, _ignored_index: int, items: List[str]):
+    """Append a bulleted list safely at the end of the doc."""
+    start = _end_insert_index(docs, doc_id)
     for it in items:
-        index = insert_paragraph(docs, doc_id, index, it)
+        insert_paragraph(docs, doc_id, start, it)
+    end = _end_insert_index(docs, doc_id) + 1  # range end is exclusive
     docs.documents().batchUpdate(
         documentId=doc_id,
         body={"requests": [{"createParagraphBullets": {
-            "range": {"startIndex": start, "endIndex": index},
+            "range": {"startIndex": start, "endIndex": end},
             "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE"
         }}]},
     ).execute()
-    return index
+    return end
 
 
-def insert_table(docs, doc_id: str, index: int, rows: List[List[str]]):
-    """Insert a real table and populate cells. Returns new cursor index after a blank line."""
+def insert_table(docs, doc_id: str, _ignored_index: int, rows: List[List[str]]):
+    """Append a real table at the end and populate cells; returns new end cursor."""
     if not rows:
-        return index
+        return _end_insert_index(docs, doc_id)
     n_rows = len(rows)
     n_cols = max(len(r) for r in rows)
 
-    # 1) Insert table at index
+    table_start = _end_insert_index(docs, doc_id)
+    # Insert table at a safe end position
     docs.documents().batchUpdate(
         documentId=doc_id,
-        body={"requests": [{"insertTable": {"rows": n_rows, "columns": n_cols, "location": {"index": index}}}]},
+        body={"requests": [{"insertTable": {"rows": n_rows, "columns": n_cols, "location": {"index": table_start}}}]},
     ).execute()
-    table_start = index
 
-    # 2) Fill every cell
+    # Fill cells
     reqs = []
     for r, row in enumerate(rows):
         for c in range(n_cols):
@@ -229,7 +245,7 @@ def insert_table(docs, doc_id: str, index: int, rows: List[List[str]]):
             reqs.append({
                 "insertText": {
                     "text": text,
-                    "location": {"index": 0},  # ignored when tableCellLocation is used
+                    "location": {"index": 0},  # ignored when tableCellLocation is set
                     "tableCellLocation": {
                         "tableStartLocation": {"index": table_start},
                         "rowIndex": r,
@@ -240,7 +256,7 @@ def insert_table(docs, doc_id: str, index: int, rows: List[List[str]]):
     if reqs:
         docs.documents().batchUpdate(documentId=doc_id, body={"requests": reqs}).execute()
 
-    # 3) Spacer line after table
+    # Spacer line after table
     return insert_paragraph(docs, doc_id, table_start, "")
 
 
@@ -258,7 +274,7 @@ def write_formatted_doc(data: Dict[str, Any]):
     # Clear previous content safely (keep final newline)
     clear_doc_preserving_final_newline(docs, doc_id)
 
-    # Build top->down
+    # Build top->down (append-safe helpers ignore the incoming index)
     cursor = 1
     cursor = insert_paragraph(docs, doc_id, cursor, data["title"], named_style="TITLE")
     cursor = insert_paragraph(docs, doc_id, cursor, data["subtitle"], named_style="SUBTITLE")
@@ -275,9 +291,8 @@ def write_formatted_doc(data: Dict[str, Any]):
         cursor = insert_paragraph(docs, doc_id, cursor, "This Week’s Results", named_style="HEADING_2")
         try:
             cursor = insert_table(docs, doc_id, cursor, data["results_rows"])
-        except HttpError as e:
-            # Fallback: simple paragraphs if table insertion ever fails
-            cursor = insert_paragraph(docs, doc_id, cursor, "(table unavailable — fallback)", named_style="NORMAL_TEXT")
+        except HttpError:
+            cursor = insert_paragraph(docs, doc_id, cursor, "(table unavailable — fallback)")
             for row in data["results_rows"]:
                 cursor = insert_paragraph(docs, doc_id, cursor, "   ".join(row))
             cursor = insert_paragraph(docs, doc_id, cursor, "")
@@ -287,8 +302,8 @@ def write_formatted_doc(data: Dict[str, Any]):
         cursor = insert_paragraph(docs, doc_id, cursor, "Standings Snapshot", named_style="HEADING_2")
         try:
             cursor = insert_table(docs, doc_id, cursor, data["standings_rows"])
-        except HttpError as e:
-            cursor = insert_paragraph(docs, doc_id, cursor, "(table unavailable — fallback)", named_style="NORMAL_TEXT")
+        except HttpError:
+            cursor = insert_paragraph(docs, doc_id, cursor, "(table unavailable — fallback)")
             for row in data["standings_rows"]:
                 cursor = insert_paragraph(docs, doc_id, cursor, "   ".join(row))
             cursor = insert_paragraph(docs, doc_id, cursor, "")
