@@ -133,7 +133,7 @@ def upsert_weekly_gdoc(content, week):
     title = f"Gridiron Gazette — Week {week}"
     query = (
         f"mimeType='application/vnd.google-apps.document' and "
-        f"name='{title.replace('\'','\\'')}' and "
+        f"name=\"{title.replace('\"', '\\\"')}\" and "
         f"'{GDRIVE_FOLDER_ID}' in parents and trashed=false"
     )
     existing = drive.files().list(q=query, fields="files(id,name)", pageSize=1).execute().get("files", [])
