@@ -9,3 +9,5 @@ __pycache__/
 creds.json
 *.key.json
 keys/
+.env
+.env
