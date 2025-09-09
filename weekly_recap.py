@@ -1,3 +1,8 @@
+# weekly_recap.py
+# Gridiron Gazette — ESPN -> OpenAI recaps -> update Google Doc
+# Requires: OPENAI_API_KEY, LEAGUE_ID, YEAR, GOOGLE_APPLICATION_CREDENTIALS, GDRIVE_FOLDER_ID, GDRIVE_DOC_ID
+# Optional (private leagues): ESPN_S2, SWID
+
 import os
 import pathlib
 import datetime as dt
@@ -5,7 +10,6 @@ from espn_api.football import League
 from openai import OpenAI
 
 from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 from google.oauth2 import service_account
 
 from team_mascots import team_mascots
@@ -15,9 +19,10 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 LEAGUE_ID = int(os.getenv("LEAGUE_ID", "0"))
 YEAR = int(os.getenv("YEAR", dt.datetime.now().year))
 WEEK_OVERRIDE = os.getenv("WEEK")  # optional override like WEEK=1
-# Drive config
-GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")         # folder where the Doc lives
-GDRIVE_DOC_ID = os.getenv("GDRIVE_DOC_ID")               # if set, update THIS Doc
+
+# Google / Drive
+GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")       # folder where your Doc lives
+GDRIVE_DOC_ID = os.getenv("GDRIVE_DOC_ID")             # the Doc to update (required)
 GOOGLE_CREDS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
 # ESPN cookies (only if league is private)
@@ -27,17 +32,21 @@ SWID = os.getenv("SWID")
 # -------- Clients --------
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+
 def connect_league():
     """Connect to ESPN league (with cookies if private)."""
     if ESPN_S2 and ***REMOVED***
         return League(league_id=LEAGUE_ID, year=YEAR, ***REMOVED***
     return League(league_id=LEAGUE_ID, year=YEAR)
 
+
 def safe_team_name(team):
+    """Robust team name getter."""
     try:
         return team.team_name
     except Exception:
         return f"{getattr(team, 'location', '').strip()} {getattr(team, 'nickname', '').strip()}".strip()
+
 
 def build_standings(league):
     rows = []
@@ -53,6 +62,7 @@ def build_standings(league):
     rows.sort(key=lambda x: (-x[1], -x[3]))
     return rows
 
+
 def md_table(rows):
     """Render a simple Markdown table from a list-of-lists rows (first row is header)."""
     widths = [max(len(str(cell)) for cell in col) for col in zip(*rows)]
@@ -62,7 +72,9 @@ def md_table(rows):
         lines.append(fmt(r))
     return "\n".join(lines)
 
+
 def recap_for_team(team_name, opp_name, team_pts, opp_pts, mascot_desc):
+    """Generate a short team recap using OpenAI (witty but respectful)."""
     system = (
         "You write fun, factual weekly fantasy football recaps. "
         "Tone: witty but respectful; 90–130 words; PG language."
@@ -85,7 +97,9 @@ Write a short recap addressed to {team_name} fans. Include the final score and o
     )
     return resp.output_text.strip()
 
+
 def build_newsletter(league, week):
+    """Assemble the weekly league newsletter in Markdown."""
     lines = []
     lines.append(f"# Gridiron Gazette — Week {week}\n")
     lines.append(f"_Generated {dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_\n")
@@ -150,76 +164,52 @@ def build_newsletter(league, week):
 
     return "\n".join(lines)
 
+
 def upsert_weekly_gdoc(content, week):
     """
-    Update an existing Google Doc if GDRIVE_DOC_ID is provided.
-    Otherwise try to find by name in the folder. If not found, creating can fail
-    for service accounts in personal Drive (quota), so we surface a friendly message.
+    Update an existing Google Doc. We REQUIRE GDRIVE_DOC_ID to avoid the
+    service-account quota error when creating files in personal Drive.
     """
+    if not GDRIVE_DOC_ID:
+        raise SystemExit(
+            "GDRIVE_DOC_ID is missing. Create a Doc in your Drive folder, share it with the bot as Editor, "
+            "copy the ID from the URL (between /d/ and /edit), add it as a GitHub secret GDRIVE_DOC_ID, "
+            "and pass it in the workflow env."
+        )
+
     scopes = [
         "https://www.googleapis.com/auth/documents",
         "https://www.googleapis.com/auth/drive",
     ]
-    creds = service_account.Credentials.from_service_account_file(GOOGLE_CREDS, scopes=scopes)
-    docs = build("docs", "v1", credentials=creds)
-    drive = build("drive", "v3", credentials=creds)
-
-    title = f"Gridiron Gazette — Week {week}"
-
-    def clear_and_insert(doc_id: str):
-        # Clear
-        doc = docs.documents().get(documentId=doc_id).execute()
-        end_index = 1
-        body = doc.get("body", {}).get("content", [])
-        if body and isinstance(body, list):
-            end_index = body[-1].get("endIndex", 1)
-        if end_index > 1:
-            docs.documents().batchUpdate(
-                documentId=doc_id,
-                body={"requests": [{"deleteContentRange": {"range": {"startIndex": 1, "endIndex": int(end_index)}}}]},
-            ).execute()
-        # Insert
-        docs.documents().batchUpdate(
-            documentId=doc_id,
-            body={"requests": [{"insertText": {"location": {"index": 1}, "text": content}}]},
-        ).execute()
-        print(f"✅ Google Doc updated: {doc_id}")
-
-    # Case 1: explicit Doc ID provided
-    if GDRIVE_DOC_ID:
-        clear_and_insert(GDRIVE_DOC_ID)
-        return
-
-    # Case 2: try to find by name in the folder
-    safe_title = title.replace("'", "\\'")
-    query = (
-        "mimeType='application/vnd.google-apps.document' and "
-        f"name='{safe_title}' and "
-        f"'{GDRIVE_FOLDER_ID}' in parents and trashed=false"
+    creds = service_account.Credentials.from_service_account_file(
+        GOOGLE_CREDS, scopes=scopes
     )
-    existing = drive.files().list(q=query, fields="files(id,name)", pageSize=1).execute().get("files", [])
-    if existing:
-        clear_and_insert(existing[0]["id"])
-        return
+    docs = build("docs", "v1", credentials=creds)
 
-    # Case 3: try to create (may fail for SA in personal Drive)
-    try:
-        new = drive.files().create(
-            body={
-                "name": title,
-                "mimeType": "application/vnd.google-apps.document",
-                "parents": [GDRIVE_FOLDER_ID],
-            }
+    # Clear and insert content
+    doc = docs.documents().get(documentId=GDRIVE_DOC_ID).execute()
+    end_index = 1
+    body = doc.get("body", {}).get("content", [])
+    if body and isinstance(body, list):
+        end_index = body[-1].get("endIndex", 1)
+
+    if end_index > 1:
+        docs.documents().batchUpdate(
+            documentId=GDRIVE_DOC_ID,
+            body={"requests": [
+                {"deleteContentRange": {"range": {"startIndex": 1, "endIndex": int(end_index)}}}
+            ]},
         ).execute()
-        clear_and_insert(new["id"])
-    except HttpError as e:
-        if e.resp.status == 403 and "storage quota" in str(e).lower():
-            raise SystemExit(
-                "Drive refused to CREATE a Doc from the service account (quota limitation on SA).\n"
-                "✅ Fix: Create a Doc manually in the target folder, share it with the bot as Editor, "
-                "then set GDRIVE_DOC_ID to that Doc's ID. The script will update it every week."
-            )
-        raise
+
+    docs.documents().batchUpdate(
+        documentId=GDRIVE_DOC_ID,
+        body={"requests": [
+            {"insertText": {"location": {"index": 1}, "text": content}}
+        ]},
+    ).execute()
+
+    print("✅ Google Doc updated (using GDRIVE_DOC_ID).")
+
 
 def main():
     league = connect_league()
@@ -233,8 +223,16 @@ def main():
     upsert_weekly_gdoc(content, week)
     print("✅ Newsletter generated & uploaded.")
 
+
 if __name__ == "__main__":
-    required = ["OPENAI_API_KEY", "LEAGUE_ID", "YEAR", "GOOGLE_APPLICATION_CREDENTIALS", "GDRIVE_FOLDER_ID"]
+    required = [
+        "OPENAI_API_KEY",
+        "LEAGUE_ID",
+        "YEAR",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GDRIVE_FOLDER_ID",
+        "GDRIVE_DOC_ID",  # required now
+    ]
     missing = [k for k in required if not os.getenv(k)]
     if missing:
         raise SystemExit(f"Missing required env vars: {missing}. Use a local .env (not committed) or GitHub Secrets.")
