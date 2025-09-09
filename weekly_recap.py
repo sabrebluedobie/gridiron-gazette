@@ -1,11 +1,13 @@
 # weekly_recap.py
-# Gridiron Gazette — ESPN -> OpenAI recaps -> update Google Doc
-# Requires: OPENAI_API_KEY, LEAGUE_ID, YEAR, GOOGLE_APPLICATION_CREDENTIALS, GDRIVE_FOLDER_ID, GDRIVE_DOC_ID
+# Gridiron Gazette — ESPN -> OpenAI recaps -> STYLED Google Doc (no plain MD)
+# Requires: OPENAI_API_KEY, LEAGUE_ID, YEAR, GOOGLE_APPLICATION_CREDENTIALS, GDRIVE_DOC_ID
 # Optional (private leagues): ESPN_S2, SWID
 
 import os
 import pathlib
 import datetime as dt
+from typing import List, Tuple, Dict, Any
+
 from espn_api.football import League
 from openai import OpenAI
 
@@ -21,8 +23,7 @@ YEAR = int(os.getenv("YEAR", dt.datetime.now().year))
 WEEK_OVERRIDE = os.getenv("WEEK")  # optional override like WEEK=1
 
 # Google / Drive
-GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")       # folder where your Doc lives
-GDRIVE_DOC_ID = os.getenv("GDRIVE_DOC_ID")             # the Doc to update (required)
+GDRIVE_DOC_ID = os.getenv("GDRIVE_DOC_ID")  # REQUIRED: we update this Doc
 GOOGLE_CREDS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
 # ESPN cookies (only if league is private)
@@ -41,45 +42,64 @@ def connect_league():
 
 
 def safe_team_name(team):
-    """Robust team name getter."""
     try:
         return team.team_name
     except Exception:
         return f"{getattr(team, 'location', '').strip()} {getattr(team, 'nickname', '').strip()}".strip()
 
 
-def build_standings(league):
-    rows = []
+def build_structured(league, week) -> Dict[str, Any]:
+    """Return structured data for formatted Google Doc."""
+    now_utc = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    title = f"Gridiron Gazette — Week {week}"
+    boxes = league.box_scores(week) or []
+
+    quick_hits: List[str] = []
+    results_rows: List[List[str]] = [["Home", "Score", "Away", "Score", "Winner"]]
+    standings_rows: List[List[str]] = [["#", "Team", "Record", "PF", "PA"]]
+    team_sections: List[Tuple[str, str]] = []  # [(team_heading, recap_text)]
+
+    # Quick hits + results
+    if boxes:
+        high = max(boxes, key=lambda b: max(b.home_score or 0, b.away_score or 0))
+        diffs = [(abs((b.home_score or 0) - (b.away_score or 0)), b) for b in boxes]
+        close = min(diffs, key=lambda x: x[0])[1]
+
+        quick_hits.append(
+            f"Highest-scoring game: {safe_team_name(high.home_team)} "
+            f"{round(high.home_score or 0,2)}–{round(high.away_score or 0,2)} "
+            f"{safe_team_name(high.away_team)}"
+        )
+        quick_hits.append(
+            f"Closest game: {safe_team_name(close.home_team)} "
+            f"{round(close.home_score or 0,2)}–{round(close.away_score or 0,2)} "
+            f"{safe_team_name(close.away_team)} "
+            f"(diff {abs((close.home_score or 0)-(close.away_score or 0)):.2f})"
+        )
+
+        for b in boxes:
+            h, a = safe_team_name(b.home_team), safe_team_name(b.away_team)
+            hs, as_ = round(b.home_score or 0, 2), round(b.away_score or 0, 2)
+            winner = h if hs > as_ else (a if as_ > hs else "Tie")
+            results_rows.append([h, str(hs), a, str(as_), winner])
+
+    # Standings
+    standings = []
     for t in league.teams:
-        rows.append((
-            safe_team_name(t),
-            t.wins,
-            t.losses,
-            round(t.points_for or 0, 2),
-            round(t.points_against or 0, 2),
-        ))
-    # sort: wins desc, PF desc
-    rows.sort(key=lambda x: (-x[1], -x[3]))
-    return rows
+        standings.append(
+            (safe_team_name(t), t.wins, t.losses, round(t.points_for or 0, 2), round(t.points_against or 0, 2))
+        )
+    standings.sort(key=lambda x: (-x[1], -x[3]))
+    for i, (name, w, l, pf, pa) in enumerate(standings, start=1):
+        standings_rows.append([str(i), name, f"{w}-{l}", f"{pf}", f"{pa}"])
 
-
-def md_table(rows):
-    """Render a simple Markdown table from a list-of-lists rows (first row is header)."""
-    widths = [max(len(str(cell)) for cell in col) for col in zip(*rows)]
-    def fmt(r): return "| " + " | ".join(str(c).ljust(w) for c, w in zip(r, widths)) + " |"
-    lines = [fmt(rows[0]), "| " + " | ".join("-"*w for w in widths) + " |"]
-    for r in rows[1:]:
-        lines.append(fmt(r))
-    return "\n".join(lines)
-
-
-def recap_for_team(team_name, opp_name, team_pts, opp_pts, mascot_desc):
-    """Generate a short team recap using OpenAI (witty but respectful)."""
-    system = (
-        "You write fun, factual weekly fantasy football recaps. "
-        "Tone: witty but respectful; 90–130 words; PG language."
-    )
-    user = f"""
+    # Team recaps
+    def recap_for_team(team_name, opp_name, team_pts, opp_pts, mascot_desc):
+        system = (
+            "You write fun, factual weekly fantasy football recaps. "
+            "Tone: witty but respectful; 90–130 words; PG language."
+        )
+        user = f"""
 Team: {team_name}
 Opponent: {opp_name}
 Final score: {team_pts}–{opp_pts} ({'win' if team_pts>opp_pts else ('loss' if team_pts<opp_pts else 'tie')})
@@ -88,147 +108,198 @@ Mascot persona: {mascot_desc}
 Write a short recap addressed to {team_name} fans. Include the final score and one observation that follows from the score (no invented stats beyond the score). End with "Next week focus:" and one sentence.
 """.strip()
 
-    resp = client.responses.create(
-        model="gpt-4o-mini",
-        input=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    )
-    return resp.output_text.strip()
-
-
-def build_newsletter(league, week):
-    """Assemble the weekly league newsletter in Markdown."""
-    lines = []
-    lines.append(f"# Gridiron Gazette — Week {week}\n")
-    lines.append(f"_Generated {dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_\n")
-
-    # Box scores & quick hits
-    boxes = league.box_scores(week)
-    if not boxes:
-        lines.append("> No box scores available yet for this week.\n")
-    else:
-        # Highest and closest
-        high = max(boxes, key=lambda b: max(b.home_score or 0, b.away_score or 0))
-        diffs = [(abs((b.home_score or 0) - (b.away_score or 0)), b) for b in boxes]
-        close = min(diffs, key=lambda x: x[0])[1]
-
-        lines.append("## Quick Hits\n")
-        lines.append(
-            f"- Highest-scoring game: "
-            f"{safe_team_name(high.home_team)} {round(high.home_score or 0,2)}–"
-            f"{round(high.away_score or 0,2)} {safe_team_name(high.away_team)}"
+        resp = client.responses.create(
+            model="gpt-4o-mini",
+            input=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
         )
-        lines.append(
-            f"- Closest game: "
-            f"{safe_team_name(close.home_team)} {round(close.home_score or 0,2)}–"
-            f"{round(close.away_score or 0,2)} {safe_team_name(close.away_team)} "
-            f"(diff {abs((close.home_score or 0)-(close.away_score or 0)):.2f})\n"
-        )
+        return resp.output_text.strip()
 
-        # Results table
-        rows = [["Home", "Score", "Away", "Score", "Winner"]]
-        for b in boxes:
-            h, a = safe_team_name(b.home_team), safe_team_name(b.away_team)
-            hs, as_ = round(b.home_score or 0, 2), round(b.away_score or 0, 2)
-            winner = h if hs > as_ else (a if as_ > hs else "Tie")
-            rows.append([h, hs, a, as_, winner])
-        lines.append("## This Week’s Results\n")
-        lines.append(md_table(rows) + "\n")
-
-    # Standings
-    standings = build_standings(league)
-    srows = [["#", "Team", "Record", "PF", "PA"]]
-    for i, (name, w, l, pf, pa) in enumerate(standings, start=1):
-        srows.append([i, name, f"{w}-{l}", f"{pf}", f"{pa}"])
-    lines.append("## Standings Snapshot\n")
-    lines.append(md_table(srows) + "\n")
-
-    # Team recaps
     if boxes:
-        lines.append("## Team Recaps\n")
         for b in boxes:
-            h_name = safe_team_name(b.home_team)
-            a_name = safe_team_name(b.away_team)
+            h_name, a_name = safe_team_name(b.home_team), safe_team_name(b.away_team)
             hs, as_ = round(b.home_score or 0, 2), round(b.away_score or 0, 2)
-
             h_mascot = team_mascots.get(h_name, "—")
             a_mascot = team_mascots.get(a_name, "—")
-
             h_recap = recap_for_team(h_name, a_name, hs, as_, h_mascot)
             a_recap = recap_for_team(a_name, h_name, as_, hs, a_mascot)
+            team_sections.append((h_name, f"**Mascot:** {h_mascot}\n\n{h_recap}"))
+            team_sections.append((a_name, f"**Mascot:** {a_mascot}\n\n{a_recap}"))
 
-            lines.append(f"### {h_name}\n**Mascot:** {h_mascot}\n\n{h_recap}\n")
-            lines.append(f"### {a_name}\n**Mascot:** {a_mascot}\n\n{a_recap}\n")
+    return {
+        "title": title,
+        "subtitle": f"Generated {now_utc}",
+        "quick_hits": quick_hits,
+        "results_rows": results_rows,
+        "standings_rows": standings_rows,
+        "team_sections": team_sections,
+        "week": week,
+    }
 
-    return "\n".join(lines)
 
+# ---------------- Google Docs writer (styled) ---------------- #
 
-def upsert_weekly_gdoc(content, week):
-    """
-    Update an existing Google Doc (requires GDRIVE_DOC_ID).
-    Robust approach:
-      1) insert content at index 1,
-      2) delete everything AFTER the inserted content,
-    so we never try to delete the trailing newline at the end of the doc.
-    """
-    if not GDRIVE_DOC_ID:
-        raise SystemExit(
-            "GDRIVE_DOC_ID is missing. Create a Doc in your Drive folder, share it with the bot as Editor, "
-            "copy the ID from the URL (between /d/ and /edit), add it as a GitHub secret GDRIVE_DOC_ID, "
-            "and pass it in the workflow env."
-        )
-
+def docs_client():
     scopes = [
         "https://www.googleapis.com/auth/documents",
         "https://www.googleapis.com/auth/drive",
     ]
-    creds = service_account.Credentials.from_service_account_file(
-        GOOGLE_CREDS, scopes=scopes
-    )
-    docs = build("docs", "v1", credentials=creds)
+    creds = service_account.Credentials.from_service_account_file(GOOGLE_CREDS, scopes=scopes)
+    return build("docs", "v1", credentials=creds)
 
-    # 1) Insert fresh content at the top
-    # NOTE: Google Docs uses UTF-16 code units for indices. Our content is ASCII/UTF-8 Markdown; len() is OK here.
-    content_len = len(content)
-    docs.documents().batchUpdate(
-        documentId=GDRIVE_DOC_ID,
-        body={"requests": [
-            {"insertText": {"location": {"index": 1}, "text": content}}
-        ]},
-    ).execute()
 
-    # 2) Delete everything AFTER the inserted content
-    # Get updated endIndex after the insert
-    doc = docs.documents().get(documentId=GDRIVE_DOC_ID).execute()
+def clear_doc_preserving_final_newline(docs, doc_id: str):
+    """Delete all content except the final newline (avoid API error)."""
+    doc = docs.documents().get(documentId=doc_id).execute()
     body = doc.get("body", {}).get("content", []) or []
     end_index = (body[-1].get("endIndex", 1) if body else 1)
-
-    # Start deleting right after what we inserted
-    delete_start = 1 + content_len
-    # Stop before the final newline: subtract 1 to avoid the trailing newline restriction
-    delete_end = max(delete_start, int(end_index) - 1)
-
-    if delete_end > delete_start:
+    clear_to = max(1, int(end_index) - 1)
+    if clear_to > 1:
         docs.documents().batchUpdate(
-            documentId=GDRIVE_DOC_ID,
-            body={"requests": [
-                {"deleteContentRange": {"range": {"startIndex": delete_start, "endIndex": delete_end}}}
-            ]},
+            documentId=doc_id,
+            body={"requests": [{"deleteContentRange": {"range": {"startIndex": 1, "endIndex": clear_to}}}]},
         ).execute()
 
-    print("✅ Google Doc updated (insert-then-trim method).")
+
+def insert_paragraph(docs, doc_id: str, index: int, text: str, named_style: str = None, bold: bool = False):
+    reqs = [{"insertText": {"location": {"index": index}, "text": text + "\n"}}]
+    if named_style or bold:
+        # Apply paragraph or text styles over the entire inserted paragraph (minus final newline)
+        length = len(text)
+        if named_style:
+            reqs.append({
+                "updateParagraphStyle": {
+                    "range": {"startIndex": index, "endIndex": index + length + 1},
+                    "paragraphStyle": {"namedStyleType": named_style},
+                    "fields": "namedStyleType"
+                }
+            })
+        if bold and length > 0:
+            reqs.append({
+                "updateTextStyle": {
+                    "range": {"startIndex": index, "endIndex": index + length},
+                    "textStyle": {"bold": True},
+                    "fields": "bold"
+                }
+            })
+    docs.documents().batchUpdate(documentId=doc_id, body={"requests": reqs}).execute()
+    return index + len(text) + 1  # new cursor
+
+
+def insert_bullets(docs, doc_id: str, index: int, items: List[str]):
+    # Insert all lines, then convert to a bulleted list
+    start = index
+    for it in items:
+        index = insert_paragraph(docs, doc_id, index, it)
+    # Apply bullets across the range we just inserted
+    docs.documents().batchUpdate(
+        documentId=doc_id,
+        body={"requests": [{"createParagraphBullets": {"range": {"startIndex": start, "endIndex": index}, "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE"}}]},
+    ).execute()
+    return index
+
+
+def insert_table(docs, doc_id: str, index: int, rows: List[List[str]]):
+    """Insert a real table and populate cells."""
+    if not rows:
+        return index
+    n_rows = len(rows)
+    n_cols = max(len(r) for r in rows)
+    # 1) Insert table
+    docs.documents().batchUpdate(
+        documentId=doc_id,
+        body={"requests": [{"insertTable": {"rows": n_rows, "columns": n_cols, "location": {"index": index}}}]},
+    ).execute()
+    # After insertion, Google creates the structure at that index; we can target cells by tableStartLocation
+    table_start = index
+    # 2) Fill cells
+    requests = []
+    for r, row in enumerate(rows):
+        for c, cell_text in enumerate(row):
+            if cell_text is None:
+                cell_text = ""
+            requests.append({
+                "insertText": {
+                    "text": cell_text,
+                    "location": {"index": 0},  # ignored when using tableCellLocation
+                    "tableCellLocation": {
+                        "tableStartLocation": {"index": table_start},
+                        "rowIndex": r,
+                        "columnIndex": c
+                    }
+                }
+            })
+    docs.documents().batchUpdate(documentId=doc_id, body={"requests": requests}).execute()
+    # Leave a blank line after table
+    return insert_paragraph(docs, doc_id, table_start, "")  # returns next index after blank line
+
+
+def write_formatted_doc(data: Dict[str, Any]):
+    if not GDRIVE_DOC_ID:
+        raise SystemExit(
+            "GDRIVE_DOC_ID is missing. Create a Doc in Drive, share with the bot as Editor, "
+            "add ID as GitHub secret GDRIVE_DOC_ID, and pass it in workflow env."
+        )
+
+    docs = docs_client()
+    doc_id = GDRIVE_DOC_ID
+
+    # 0) Clear previous content safely
+    clear_doc_preserving_final_newline(docs, doc_id)
+
+    # 1) Build the document top->down
+    cursor = 1  # start after doc start
+    cursor = insert_paragraph(docs, doc_id, cursor, data["title"], named_style="TITLE")
+    cursor = insert_paragraph(docs, doc_id, cursor, data["subtitle"], named_style="SUBTITLE")
+    cursor = insert_paragraph(docs, doc_id, cursor, "")  # spacer
+
+    # Quick Hits
+    if data["quick_hits"]:
+        cursor = insert_paragraph(docs, doc_id, cursor, "Quick Hits", named_style="HEADING_2")
+        cursor = insert_bullets(docs, doc_id, cursor, data["quick_hits"])
+        cursor = insert_paragraph(docs, doc_id, cursor, "")  # spacer
+
+    # Results table
+    if data["results_rows"] and len(data["results_rows"]) > 1:
+        cursor = insert_paragraph(docs, doc_id, cursor, "This Week’s Results", named_style="HEADING_2")
+        cursor = insert_table(docs, doc_id, cursor, data["results_rows"])
+
+    # Standings table
+    if data["standings_rows"] and len(data["standings_rows"]) > 1:
+        cursor = insert_paragraph(docs, doc_id, cursor, "Standings Snapshot", named_style="HEADING_2")
+        cursor = insert_table(docs, doc_id, cursor, data["standings_rows"])
+
+    # Team Recaps
+    if data["team_sections"]:
+        cursor = insert_paragraph(docs, doc_id, cursor, "Team Recaps", named_style="HEADING_2")
+        for team_name, recap_md in data["team_sections"]:
+            # Minimal inline cleanup: strip **…** around "Mascot:"
+            recap_text = recap_md.replace("**Mascot:**", "Mascot:")
+            cursor = insert_paragraph(docs, doc_id, cursor, team_name, named_style="HEADING_3")
+            cursor = insert_paragraph(docs, doc_id, cursor, recap_text)
+            cursor = insert_paragraph(docs, doc_id, cursor, "")  # spacer
+
+    print("✅ Google Doc updated (styled headings, bullets, and tables).")
+
+
+# ---------------- Main ---------------- #
+
 def main():
     league = connect_league()
     week = int(WEEK_OVERRIDE) if WEEK_OVERRIDE else getattr(league, "current_week", 1)
-    content = build_newsletter(league, week)
+    data = build_structured(league, week)
 
+    # also save a text copy locally (optional)
     outdir = pathlib.Path(f"recaps/week_{week}")
     outdir.mkdir(parents=True, exist_ok=True)
-    (outdir / "newsletter.md").write_text(content, encoding="utf-8")
+    (outdir / "newsletter.md").write_text(
+        f"{data['title']}\n{data['subtitle']}\n\n" + "\n".join(data.get("quick_hits", [])),
+        encoding="utf-8",
+    )
 
-    upsert_weekly_gdoc(content, week)
+    write_formatted_doc(data)
     print("✅ Newsletter generated & uploaded.")
 
 
@@ -238,10 +309,9 @@ if __name__ == "__main__":
         "LEAGUE_ID",
         "YEAR",
         "GOOGLE_APPLICATION_CREDENTIALS",
-        "GDRIVE_FOLDER_ID",
-        "GDRIVE_DOC_ID",  # required now
+        "GDRIVE_DOC_ID",  # required
     ]
     missing = [k for k in required if not os.getenv(k)]
     if missing:
-        raise SystemExit(f"Missing required env vars: {missing}. Use a local .env (not committed) or GitHub Secrets.")
+        raise SystemExit(f"Missing required env vars: {missing}. Use GitHub Secrets.")
     main()
