@@ -176,8 +176,9 @@ Top performers (suggested to reference):
 Underperformers (do not roast, just light accountability):
 - {("\n- ".join(under_lines)) if under_lines else "None available"}
 
-Write a short recap addressed to {team_name} fans. Include the final score and one observation that follows from the score (no invented stats beyond the score). Mention 1–2 players by name from the lists above. End with "Next week focus:" and one sentence.
-""".strip()
+Write a short recap addressed to {team_name} fans. Include the final score and one observation that follows from the score (no invented stats beyond the score). Mention 2-3 players by name from the lists above. End with "Next week focus:" and one sentence.
+cleaned_text = some_text.strip()
+f"{cleaned_text}"
 
         resp = client.responses.create(
             model="gpt-4o-mini",
