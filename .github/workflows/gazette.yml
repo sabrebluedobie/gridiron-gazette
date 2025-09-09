@@ -2,14 +2,16 @@ name: Gridiron Gazette (Tuesday)
 
 on:
   schedule:
-    - cron: "0 13 * * 2"   # Tuesdays 13:00 UTC (adjust if you want)
-  workflow_dispatch: {}
+    - cron: "0 13 * * 2"   # Tuesdays 13:00 UTC
+  workflow_dispatch:
 
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -22,17 +24,17 @@ jobs:
           pip install -r requirements.txt
 
       - name: Write Google creds
-        run: echo '${{ secrets.GCP_CREDENTIALS }}' > creds.json
+        run: |
+          echo '${{ secrets.GCP_CREDENTIALS }}' > creds.json
 
       - name: Generate & upload Gazette
-  env:
-    ***REMOVED***
-    LEAGUE_ID: ${{ secrets.LEAGUE_ID }}
-    YEAR: ${{ vars.YEAR || '2025' }}
-    GOOGLE_APPLICATION_CREDENTIALS: creds.json
-    GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
-    GDRIVE_DOC_ID: ${{ secrets.GDRIVE_DOC_ID }}   # <= this
-    ***REMOVED***
-    ***REMOVED***
-  run: python weekly_recap.py
-        
+        env:
+          ***REMOVED***
+          LEAGUE_ID: ${{ secrets.LEAGUE_ID }}
+          YEAR: ${{ vars.YEAR || '2025' }}
+          GOOGLE_APPLICATION_CREDENTIALS: creds.json
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_DOC_ID: ${{ secrets.GDRIVE_DOC_ID }}
+          ***REMOVED***
+          ***REMOVED***
+        run: python weekly_recap.py
