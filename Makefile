@@ -11,3 +11,9 @@ pdf:
 
 debug:
 \t. .venv/bin/activate && python debug_mascots.py
+
+.PHONY: gen-logos
+
+gen-logos:
+\t. .venv/bin/activate && python generate_logos.py --from-espn
+
