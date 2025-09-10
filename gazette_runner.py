@@ -12,11 +12,29 @@ from docx.shared import Mm
 from gazette_data import fetch_week_from_espn, build_context
 from mascots_util import logo_for
 
+def to_pdf_with_soffice(docx_path: str) -> str:
+    import os, subprocess, shutil
+    outdir = os.path.dirname(docx_path) or "."
+    cmd = ["soffice", "--headless", "--convert-to", "pdf", "--outdir", outdir, docx_path]
+    try:
+        subprocess.run(cmd, check=True)
+    except Exception:
+        # fallback to absolute path (Homebrew sometimes doesn’t symlink)
+        cmd[0] = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+        subprocess.run(cmd, check=True)
+    return os.path.splitext(docx_path)[0] + ".pdf"
+
 # Try docx2pdf if available (Mac/Windows with Word); fall back to LibreOffice
 try:
-    from docx2pdf import convert  # type: ignore[import-not-found]
+    from docx2pdf import convert as _convert
+    # Word sometimes fails on mac; try it, but fall back to soffice.
+try:
+        _convert(out_docx, os.path.splitext(out_docx)[0] + ".pdf")
+    except Exception:
+        to_pdf_with_soffice(out_docx)
 except Exception:
-    convert = None  # we'll handle fallback gracefully
+    to_pdf_with_soffice(out_docx)
+
 
 def _safe(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", s or "")
