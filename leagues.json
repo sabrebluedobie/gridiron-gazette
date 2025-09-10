@@ -1,11 +1,13 @@
 [
   {
     "name": "Browns SEA/KC",
-"league_id": 887998,
+    "league_id": 887998,
     "year": 2025,
     "espn_s2": "",  "swid": "",
     "week_label": "Week 1 (Sep 4–9, 2025)",
-    "sponsor": {"name":"Hanover Bikes","line":"Ride into fall with 10% off!"}
+    "sponsor": {"name":"Hanover Bikes","line":"Ride into fall with 10% off!"},
+    "blurbs": true,
+    "blurb_style": "mascot"
   }
   
 ]

@@ -59,6 +59,7 @@ _CANDIDATE_DIRS = [
     _REPO_ROOT / "assets" / "Logos",
     _REPO_ROOT / "logos",
     _REPO_ROOT / "logos" / "generated_logo",   # your generated set
+    _REPO_ROOT / "logos" / "ai",              # your AI-generated set
     _REPO_ROOT / "static" / "logos",
     _REPO_ROOT / "images" / "logos",
 ]
