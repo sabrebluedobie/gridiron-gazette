@@ -128,7 +128,7 @@ def main():
     ap.add_argument("--week", type=int)
     ap.add_argument("--week-label")
     ap.add_argument("--date")
-    ap.add_argument("--slots", type=int, default=6, help="How many MATCHUPi_* slots your template includes")
+    ap.add_argument("--slots", type=int, default=12, help="How many MATCHUPi_* slots your template includes")
     args = ap.parse_args()
 
     try:
