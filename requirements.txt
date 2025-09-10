@@ -1,6 +1,9 @@
-docxtpl==0.16.7
-python-docx==1.1.2
-espn-api>=0.36.0
-openai>=1.40.0
-docx2pdf>=0.1.8     # optional, for PDF on Mac w/ Word
+
+espn-api
+openai
+docxtpl
+python-docx
+pillow
+docx2pdf
+pytest
 
