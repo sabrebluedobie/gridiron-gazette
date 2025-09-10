@@ -1,16 +1,11 @@
 [
   {
-    "name": "Wafflers (Demo)",
-    "league_id": 887998,
+    "name": "Browns SEA/KC",
+"league_id": 887998,
     "year": 2025,
-    "gdoc_id": "YOUR_GOOGLE_DOC_ID_HERE",
-    "espn_s2": "",
-    "swid": "",
-    "mascots": {
-      "Under the InfluWENTZ": "drunken beer bottle hiccups and makes us laugh",
-      "The Champ Big Daddy": "Large biracial (black/white) man likes lifting heavy weights, riding a bicycle, and tracking outdoors"
-      // ...optional: override/add more mappings per team name
-    }
+    "espn_s2": "",  "swid": "",
+    "week_label": "Week 1 (Sep 4–9, 2025)",
+    "sponsor": {"name":"Hanover Bikes","line":"Ride into fall with 10% off!"}
   }
-  // Add more leagues here
+  
 ]
