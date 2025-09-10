@@ -15,3 +15,17 @@ team_mascots = {
     "THE 💀REBELS💀": "Large dark-haired, bearded knight wielding a sword; gets angry if losing.",
     "The Champ Big Daddy": "Large biracial (Black/White) man who loves lifting heavy weights, riding a bicycle, and tracking outdoors.",
 }
+
+team_logos = {
+    "Annie1235 slayy": "logos/generated_logos/Annie1235_slayy.png",
+    "Phoenix Blues": "logos/generated_logos/Phoenix_Blues.png",
+    "Nana's Hawks": "logos/generated_logos/Nanas_Hawks.png",
+    "Jimmy Birds": "logos/generated_logos/Jimmy_Birds.png",
+    "Kansas City Pumas": "logos/generated_logos/Kansas_City_Pumas.png",
+    "Under the InfluWENTZ": "logos/generated_logos/Under_the_InfluWENTZ.png",
+    "DEM BOY’S! 🏆🏆🏆🏆": "logos/generated_logos/DEM_BOY_S.png",
+    "Avondale Welders": "logos/generated_logos/Avondale_Welders.png",
+    "THE 💀REBELS💀": "logos/generated_logos/THE_REBELS_.png",
+    "The Champ Big Daddy": "logos/generated_logos/The_Champ_Big_Daddy.png", 
+    
+}
