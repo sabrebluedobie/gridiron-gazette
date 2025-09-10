@@ -15,3 +15,5 @@ keys/
 # build artifacts
 recaps/
 *.pdf
+
+leagues.local.json
