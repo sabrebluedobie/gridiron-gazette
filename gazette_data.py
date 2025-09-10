@@ -1,26 +1,24 @@
 # gazette_data.py
-# Shared data layer: ESPN fetch + optional OpenAI blurbs + context building.
-
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any, Tuple
 import os
 
 from mascots_util import mascot_for
+from storymaker import make_story_and_prompts  # NEW
 
-# ESPN API (pip install espn-api)
+# ESPN API
 try:
     from espn_api.football import League
 except Exception:
-    League = None  # handled below
+    League = None
 
-# OpenAI (pip install openai >= 1.0)
+# OpenAI (only used inside storymaker via chat; we still use blurbs here if desired)
 try:
     from openai import OpenAI
     _OPENAI = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) if os.getenv("OPENAI_API_KEY") else None
 except Exception:
     _OPENAI = None
-
 
 @dataclass
 class Game:
@@ -35,34 +33,27 @@ class Game:
     defense_note: Optional[str] = None
     blurb: Optional[str] = None
 
-
 def _fnum(x) -> float:
-    try:
-        return float(x or 0)
-    except Exception:
-        return 0.0
+    try: return float(x or 0)
+    except: return 0.0
 
 def _top_scorer(lineup) -> Optional[Tuple[str, float, str]]:
-    """Return (name, points, pos) for the top starter."""
     try:
         starters = [p for p in (lineup or []) if getattr(p, "slot_position", "") not in ("BE", "IR")]
-        if not starters:
-            return None
+        if not starters: return None
         top = max(starters, key=lambda p: _fnum(getattr(p, "points", 0)))
         name = getattr(getattr(top, "playerName", None) or top, "name", None) or getattr(top, "name", "Player")
         pts = _fnum(getattr(top, "points", 0))
         pos = getattr(top, "slot_position", "") or getattr(top, "position", "")
         return (str(name), pts, pos)
-    except Exception:
-        return None
+    except: return None
 
 def _biggest_bust(home_lineup, away_lineup) -> Optional[str]:
     worst = None
     cand = []
     try:
         for p in (home_lineup or []) + (away_lineup or []):
-            if getattr(p, "slot_position", "") in ("BE", "IR"):
-                continue
+            if getattr(p, "slot_position", "") in ("BE", "IR"): continue
             actual = _fnum(getattr(p, "points", 0))
             proj = _fnum(getattr(p, "projected_points", 0))
             delta = actual - proj
@@ -70,30 +61,12 @@ def _biggest_bust(home_lineup, away_lineup) -> Optional[str]:
             team = getattr(p, "proTeam", "") or ""
             pos = getattr(p, "position", "") or getattr(p, "slot_position", "")
             cand.append((delta, f"{name} ({pos} {team}) {actual:.1f} vs {proj:.1f} proj"))
-        if not cand:
-            return None
+        if not cand: return None
         worst = min(cand, key=lambda x: x[0])
         return worst[1]
-    except Exception:
-        return None
-
-def _ai_line(text: str, league_name: str) -> str:
-    if not _OPENAI:
-        return text
-    try:
-        resp = _OPENAI.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user",
-                       "content": f"League: {league_name}\nWrite a single, punchy recap (<=18 words), neutral tone.\n{text}"}],
-            temperature=0.6, max_tokens=64,
-        )
-        msg = (resp.choices[0].message.content or "").strip()
-        return msg or text
-    except Exception:
-        return text
+    except: return None
 
 def fetch_week_from_espn(league_id: int, year: int, ***REMOVED***
-    """Richer fetch using box_scores (works with public; for private pass cookies)."""
     if League is None:
         raise RuntimeError("espn-api not installed. Run: pip install espn-api")
     league = League(league_id=league_id, year=year, ***REMOVED***
@@ -115,8 +88,7 @@ def fetch_week_from_espn(league_id: int, year: int, ***REMOVED***
     return games
 
 def _awards(games: List[Game]) -> Dict[str, Any]:
-    if not games:
-        return {}
+    if not games: return {}
     by_team = []
     for g in games:
         by_team.append((g.home, g.hs))
@@ -136,8 +108,10 @@ def build_context(league_cfg: Dict[str, Any], games: List[Game]) -> Dict[str, An
     week_label = league_cfg.get("week_label") or "This Week"
     games_ctx = []
     for g in games:
-        base_line = f"{g.home} {g.hs:.1f} vs {g.away} {g.ascore:.1f}."
-        blurb = _ai_line(base_line, league) if league_cfg.get("blurbs", True) else None
+        # NEW: story + prompts from mascot descriptions
+        sp = make_story_and_prompts(g.home, g.away,
+                                    int(g.hs) if g.hs.is_integer() else g.hs,
+                                    int(g.ascore) if g.ascore.is_integer() else g.ascore)
         games_ctx.append({
             "home": g.home,
             "away": g.away,
@@ -150,7 +124,13 @@ def build_context(league_cfg: Dict[str, Any], games: List[Game]) -> Dict[str, An
             "biggest_bust": g.biggest_bust,
             "key_play": g.key_play,
             "defense_note": g.defense_note,
-            "blurb": blurb,
+            "blurb": g.blurb,
+            # NEW fields:
+            "story": sp["story"],
+            "article_prompt": sp["article_prompt"],
+            "badge_prompt": sp["badge_prompt"],
+            "home_desc": sp["home_desc"],
+            "away_desc": sp["away_desc"],
         })
     return {
         "league": league,
