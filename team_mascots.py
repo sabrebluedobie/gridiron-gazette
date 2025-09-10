@@ -17,11 +17,13 @@ team_mascots = {
 }
 
 team_logos = {
+    # EAST
     "Annie1235 slayy": "logos/generated_logos/Annie1235_slayy.png",
     "Phoenix Blues": "logos/generated_logos/Phoenix_Blues.png",
     "Nana's Hawks": "logos/generated_logos/Nanas_Hawks.png",
     "Jimmy Birds": "logos/generated_logos/Jimmy_Birds.png",
     "Kansas City Pumas": "logos/generated_logos/Kansas_City_Pumas.png",
+    # WEST
     "Under the InfluWENTZ": "logos/generated_logos/Under_the_InfluWENTZ.png",
     "DEM BOY’S! 🏆🏆🏆🏆": "logos/generated_logos/DEM_BOY_S.png",
     "Avondale Welders": "logos/generated_logos/Avondale_Welders.png",
