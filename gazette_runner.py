@@ -32,20 +32,45 @@ def add_enumerated_matchups(context: Dict[str, Any], max_slots: int = 12) -> Non
     games = context.get("games", []) or []
     for i in range(1, max_slots + 1):
         g = games[i - 1] if i - 1 < len(games) else {}
-        context[f"MATCHUP{i}_HOME"] = g.get("home", "") or ""
-        context[f"MATCHUP{i}_AWAY"] = g.get("away", "") or ""
+        name_home = g.get("home", "") or ""
+        name_away = g.get("away", "") or ""
+
+        # names/scores
+        context[f"MATCHUP{i}_HOME"] = name_home
+        context[f"MATCHUP{i}_AWAY"] = name_away
         context[f"MATCHUP{i}_HS"]   = _as_str(g.get("hs", ""))
         context[f"MATCHUP{i}_AS"]   = _as_str(g.get("as", ""))
-        context[f"MATCHUP{i}_HOME_NAME"] = context[f"MATCHUP{i}_HOME"]
-        context[f"MATCHUP{i}_AWAY_NAME"] = context[f"MATCHUP{i}_AWAY"]
+
+        # common synonyms some templates use
+        context[f"MATCHUP{i}_HOME_NAME"] = name_home
+        context[f"MATCHUP{i}_AWAY_NAME"] = name_away
+        context[f"MATCHUP{i}_TEAM_HOME"] = name_home
+        context[f"MATCHUP{i}_TEAM_AWAY"] = name_away
+
+        # mascots & narrative
         context[f"MATCHUP{i}_HOME_MASCOT"] = g.get("home_mascot", "") or ""
         context[f"MATCHUP{i}_AWAY_MASCOT"] = g.get("away_mascot", "") or ""
+        context[f"MATCHUP{i}_BLURB"]       = g.get("blurb", "") or ""
+
+        # spotlight stats
         context[f"MATCHUP{i}_TOP_HOME"]    = g.get("home_top", "") or ""
         context[f"MATCHUP{i}_TOP_AWAY"]    = g.get("away_top", "") or ""
         context[f"MATCHUP{i}_BUST"]        = g.get("biggest_bust", "") or ""
         context[f"MATCHUP{i}_KEYPLAY"]     = g.get("key_play", "") or ""
         context[f"MATCHUP{i}_DEF"]         = g.get("defense_note", "") or ""
-        context[f"MATCHUP{i}_BLURB"]       = g.get("blurb", "") or ""
+
+def add_award_shortcuts(context: Dict[str, Any]) -> None:
+    a = context.get("awards") or {}
+    ts = a.get("top_score") or {}
+    ls = a.get("low_score") or {}
+    lg = a.get("largest_gap") or {}
+    context["AWARD_TOP_TEAM"] = ts.get("team", "") or ""
+    context["AWARD_TOP_POINTS"] = ts.get("points", "") or ""
+    context["AWARD_LOW_TEAM"] = ls.get("team", "") or ""
+    context["AWARD_LOW_POINTS"] = ls.get("points", "") or ""
+    context["AWARD_GAP_DESC"] = lg.get("desc", "") or ""
+    context["AWARD_GAP_POINTS"] = lg.get("gap", "") or ""
+
 
 def add_logo_images(context: Dict[str, Any], doc: DocxTemplate, max_slots: int = 12, width_mm: float = 18.0) -> None:
     for i in range(1, max_slots + 1):
@@ -55,6 +80,7 @@ def add_logo_images(context: Dict[str, Any], doc: DocxTemplate, max_slots: int =
         ap = logo_for(away)
         context[f"MATCHUP{i}_HOME_LOGO"] = InlineImage(doc, hp, width=Mm(width_mm)) if hp else ""
         context[f"MATCHUP{i}_AWAY_LOGO"] = InlineImage(doc, ap, width=Mm(width_mm)) if ap else ""
+
 
 def render_docx(context: Dict[str, Any], template="recap_template.docx",
                 out_root="recaps", slots: int = 12, logo_mm: float = 18.0) -> str:
@@ -69,6 +95,12 @@ def render_docx(context: Dict[str, Any], template="recap_template.docx",
     docx_path = out_dir / f"Gazette_{week}.docx"
     doc = DocxTemplate(template)
     add_logo_images(context, doc, max_slots=slots, width_mm=logo_mm)
+    add_enumerated_matchups(context, max_slots=slots)
+    add_award_shortcuts(context)             # <-- add this line
+
+    doc = DocxTemplate(template)
+    add_logo_images(context, doc, max_slots=slots, width_mm=logo_mm)
+    doc.render(context)
     doc.render(context)
     doc.save(str(docx_path))
     return str(docx_path)
