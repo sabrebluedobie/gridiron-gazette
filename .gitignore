@@ -11,3 +11,7 @@ creds.json
 keys/
 .env
 .env
+
+# build artifacts
+recaps/
+*.pdf
