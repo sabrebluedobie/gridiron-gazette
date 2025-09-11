@@ -28,7 +28,7 @@ def to_pdf_with_soffice(docx_path: str) -> str:
 try:
     from docx2pdf import convert as _convert
     # Word sometimes fails on mac; try it, but fall back to soffice.
-try:
+    try:
         _convert(out_docx, os.path.splitext(out_docx)[0] + ".pdf")
     except Exception:
         to_pdf_with_soffice(out_docx)
@@ -120,8 +120,11 @@ def render_docx(context: Dict[str, Any], template="recap_template.docx",
     add_logo_images(context, doc, max_slots=slots, width_mm=logo_mm)
     doc.render(context)
     doc.render(context)
+    # around line ~123, right after doc.save(...)
     doc.save(str(docx_path))
-    return str(docx_path)
+    out_docx = str(docx_path)     # 👈 add this
+    return out_docx               # 👈 and return it if render_docx is supposed to return the path
+
 
 def to_pdf(docx_path: str) -> str:
     pdf_path = str(Path(docx_path).with_suffix(".pdf"))
