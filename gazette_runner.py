@@ -43,6 +43,8 @@ except Exception:
         return None
     
 
+# --- replace your existing BLURB_PROMPT + maybe_expand_blurbs with this ---
+
 BLURB_PROMPT = """You are a sports desk writer crafting vivid weekly fantasy FOOTBALL recaps.
 Write a {words}-word, lively but concise game story in plain text (no markdown or emojis).
 Include: who won, final fantasy score, the pivotal moment, and 1–2 standout performers.
@@ -50,7 +52,7 @@ If any detail is missing, gracefully skip it without inventing facts.
 
 Context:
 - Home: {home}  Away: {away}
-- Final: {hs}-{as}
+- Final: {hs}-{away_score}
 - Top (Home): {top_home}
 - Top (Away): {top_away}
 - Biggest Bust: {bust}
@@ -61,6 +63,7 @@ Tone: energetic local-paper style. Avoid clichés. One tight paragraph.
 
 def maybe_expand_blurbs(ctx, words: int = 160, model: str = "gpt-4o-mini", temperature: float = 0.7):
     """Replace/augment each game's 'blurb' using an LLM. Requires OPENAI_API_KEY."""
+    import os
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         print("[warn] --llm-blurbs set but OPENAI_API_KEY not found; skipping expansion.")
@@ -78,10 +81,10 @@ def maybe_expand_blurbs(ctx, words: int = 160, model: str = "gpt-4o-mini", tempe
         prompt = BLURB_PROMPT.format(
             words=words,
             home=g.get("home",""), away=g.get("away",""),
-            hs=g.get("hs",""), as_=g.get("as",""),
+            hs=g.get("hs",""), away_score=g.get("as",""),
             top_home=g.get("top_home",""), top_away=g.get("top_away",""),
             bust=g.get("bust",""), keyplay=g.get("keyplay",""), dnote=g.get("def","")
-        ).replace("{as}", str(g.get("as","")))  # keep {as} safe if appears
+        )
 
         try:
             resp = client.responses.create(
@@ -94,6 +97,7 @@ def maybe_expand_blurbs(ctx, words: int = 160, model: str = "gpt-4o-mini", tempe
                 g["blurb"] = text
         except Exception as e:
             print(f"[warn] LLM blurb failed for {g.get('home','?')} vs {g.get('away','?')}: {e}")
+
 
 # ---------------- PDF helpers ----------------
 
