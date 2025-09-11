@@ -17,3 +17,21 @@ debug:
 gen-logos:
 \t. .venv/bin/activate && python generate_logos.py --from-espn
 
+# Makefile snippet
+VENVDIR ?= .venv
+PY      ?= $(VENVDIR)/bin/python
+SLOTS   ?= 10
+WEEK    ?=
+LLM     ?=
+PDF     ?=
+
+define RUN_FLAGS
+--slots $(SLOTS) \
+$(if $(WEEK),--week $(WEEK),) \
+$(if $(LLM),--llm-blurbs,) \
+$(if $(PDF),--pdf,)
+endef
+
+.PHONY: run
+run:
+	$(PY) gazette_runner.py $(RUN_FLAGS)
