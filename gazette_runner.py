@@ -4,7 +4,7 @@ Generate styled Weekly Gazette DOCX/PDF files for one or many leagues.
 
 Examples:
   # branding smoke test (no ESPN; checks logos/template)
-  python3 gazette_runner.py --branding-test --slots 1 --print-logo-map --pdf
+  python3 gazette_runner.py --branding-test --slots 1 --print-logo-map --pdf --pdf-engine soffice
 
   # full run (force week 1 while testing)
   python3 gazette_runner.py --slots 10 --week 1 --pdf
@@ -62,18 +62,37 @@ def to_pdf_with_soffice(docx_path: str) -> str:
     return pdf_path
 
 
-def to_pdf(docx_path: str) -> str:
-    """Try docx2pdf (Word) first; otherwise fall back to LibreOffice."""
+def to_pdf(docx_path: str, engine: str = "auto") -> str:
+    """Convert DOCX to PDF using the chosen engine."""
+    pdf_path = os.path.splitext(docx_path)[0] + ".pdf"
+
+    def _ok(p: str) -> bool:
+        try:
+            return os.path.exists(p) and os.path.getsize(p) > 0
+        except Exception:
+            return False
+
+    if engine == "soffice":
+        return to_pdf_with_soffice(docx_path)
+    if engine == "word":
+        try:
+            from docx2pdf import convert as _convert  # type: ignore
+            _convert(docx_path, pdf_path)
+            if _ok(pdf_path):
+                return pdf_path
+        except Exception:
+            pass
+        return to_pdf_with_soffice(docx_path)
+
+    # auto: try Word then fall back
     try:
         from docx2pdf import convert as _convert  # type: ignore
-        pdf_path = os.path.splitext(docx_path)[0] + ".pdf"
-        try:
-            _convert(docx_path, pdf_path)
+        _convert(docx_path, pdf_path)
+        if _ok(pdf_path):
             return pdf_path
-        except Exception:
-            return to_pdf_with_soffice(docx_path)
     except Exception:
-        return to_pdf_with_soffice(docx_path)
+        pass
+    return to_pdf_with_soffice(docx_path)
 
 # ============================================================
 # Logo discovery
@@ -267,7 +286,13 @@ def add_enumerated_matchups(context: Dict[str, Any], max_slots: int) -> None:
             hs_f = float(hs) if hs not in ("", None) else float("nan")
             as_f = float(aS) if aS not in ("", None) else float("nan")
             if hs not in ("", None) and aS not in ("", None):
-                scoreline = f"{home} {int(hs_f) if hs_f == int(hs_f) else hs_f} – {away} {int(as_f) if as_f == int(as_f) else as_f}"
+                def _fmt(x): 
+                    try:
+                        xf = float(x)
+                        return int(xf) if xf.is_integer() else xf
+                    except Exception:
+                        return x
+                scoreline = f"{home} {_fmt(hs_f)} – {away} {_fmt(as_f)}"
                 winner = home if hs_f >= as_f else away
                 loser  = away if hs_f >= as_f else home
                 headline = f"{winner} def. {loser}"
@@ -300,6 +325,10 @@ def add_template_synonyms(context: Dict[str, Any], slots: int) -> None:
     context["AWARD_CUPCAKE_NOTE"] = str(low_score.get("points", "")) or ""
     context["AWARD_KITTY_TEAM"]   = largest_gap.get("desc", "")
     context["AWARD_KITTY_NOTE"]   = str(largest_gap.get("gap", "")) or ""
+
+    # quiet optional placeholders if the template contains them
+    for k in ["AWARD_MANAGER_NOTE", "AWARD_PLAY_NOTE", "FOOTER_NOTE", "title", "MATCHUP", "SPONSOR"]:
+        context.setdefault(k, "")
 
 # ============================================================
 # Branding images
@@ -493,17 +522,19 @@ def maybe_expand_blurbs(ctx: Dict[str, Any], words: int = 160, model: str = "gpt
 # Rendering
 # ============================================================
 
-def _safe_get_missing(doc: DocxTemplate) -> List[str]:
-    """Return undeclared variables if docxtpl supports it; otherwise be silent."""
+def _safe_get_missing(doc: DocxTemplate, ctx: dict) -> List[str]:
+    """
+    Return placeholders that exist in the template but are NOT present in ctx.
+    Works across docxtpl versions.
+    """
     try:
-        # Most versions expose a zero-arg variant
-        missing = doc.get_undeclared_template_variables()
-        return sorted(missing) if missing else []
+        found = set(doc.get_undeclared_template_variables())
     except TypeError:
-        # Some very old versions take a Jinja2 Environment; skip to avoid breaking runs
         return []
     except Exception:
         return []
+    ctx_keys = set(ctx.keys())
+    return sorted(v for v in found if v not in ctx_keys)
 
 
 def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple[str, Optional[str], Dict[str, str]]:
@@ -552,7 +583,7 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
     add_branding_images(ctx, doc, cfg)
 
     # Helpful warning during template editing
-    missing = _safe_get_missing(doc)
+    missing = _safe_get_missing(doc, ctx)
     if missing:
         print(f"[warn] Template references unknown variables: {missing}")
 
@@ -571,7 +602,7 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
 
     pdf_path: Optional[str] = None
     if args.pdf:
-        pdf_path = to_pdf(str(docx_path))
+        pdf_path = to_pdf(str(docx_path), engine=args.pdf_engine)
 
     if args.print_logo_map:
         print(f"[logo-map] {league_name}:")
@@ -589,7 +620,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--leagues", default="leagues.json", help="Path to leagues config JSON.")
     ap.add_argument("--template", default="recap_template.docx", help="DOCX template to render.")
     ap.add_argument("--out-dir", default="recaps", help="Output root directory.")
-    ap.add_argument("--pdf", action="store_true", help="Also export PDF (via LibreOffice/docx2pdf).")
+    ap.add_argument("--pdf", action="store_true", help="Also export PDF.")
+    ap.add_argument("--pdf-engine", choices=["auto", "soffice", "word"], default="auto",
+                    help="PDF converter engine.")
 
     ap.add_argument("--league", default=None, help="Only render the league with this name.")
     ap.add_argument("--week", type=int, default=None, help="Force a specific completed week number.")
