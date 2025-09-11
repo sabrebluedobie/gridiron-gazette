@@ -8,6 +8,7 @@
 #
 # Tip: For LLM blurbs, first:
 #   source .venv/bin/activate && export ***REMOVED***
+ENVUTF8 := PYTHONIOENCODING=utf-8 LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 
 VENV            ?= .venv
 PY              := $(VENV)/bin/python3
@@ -52,6 +53,13 @@ endif
 ifeq ($(LLM),1)
 ARGS += --llm-blurbs --blurb-words $(BLURB_WORDS) --model $(MODEL) --temperature $(TEMP) --blurb-style $(BLURB_STYLE)
 endif
+
+run:
+	$(ENVUTF8) $(PY) gazette_runner.py $(ARGS)
+
+branding-test:
+	$(ENVUTF8) $(PY) gazette_runner.py --branding-test --slots 1 $(ARGS)
+
 
 # ---- Phony targets ----
 .PHONY: help venv install upgrade run branding-test pdf clean
