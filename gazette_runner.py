@@ -2,25 +2,16 @@
 """
 Generate styled Weekly Gazette DOCX/PDF files for one or many leagues.
 
-Usage examples:
-  # normal run (DOCX)
-  python3 gazette_runner.py --slots 10
+Examples:
+  # branding smoke test (no ESPN; checks logos/template)
+  python3 gazette_runner.py --branding-test --slots 1 --print-logo-map --pdf
 
-  # with PDF export
-  python3 gazette_runner.py --slots 10 --pdf
-
-  # force a specific week (recommended to sanity check)
+  # full run (force week 1 while testing)
   python3 gazette_runner.py --slots 10 --week 1 --pdf
 
-  # only one league by name (must match leagues.json "name")
-  python3 gazette_runner.py --league "BrownSEA-KC League" --slots 10 --pdf
-
-  # branding smoke test (no ESPN calls)
-  python3 gazette_runner.py --branding-test --slots 1 --print-logo-map
-
-  # long-form blurbs via OpenAI (with fallback if API fails)
+  # with long-form blurbs (requires OPENAI_API_KEY)
   export ***REMOVED***
-  python3 gazette_runner.py --slots 10 --llm-blurbs --blurb-words 180 --temperature 0.6 --pdf
+  python3 gazette_runner.py --slots 10 --week 1 --llm-blurbs --blurb-style mascot --pdf
 """
 
 from __future__ import annotations
@@ -35,26 +26,27 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
-# Third-party
+# -------- Third-party --------
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 
-# Local modules
+# -------- Local modules --------
 try:
     from gazette_data import build_context, fetch_week_from_espn
 except Exception as e:
     print("[error] Unable to import gazette_data. Run from the repo root. ", e, file=sys.stderr)
     raise
 
-# Optional: use mascots_util mapping if available
+# mascots_util is optional; fall back safely if missing
 try:
-    from mascots_util import logo_for as lookup_logo  # returns a path or None
+    from mascots_util import logo_for as lookup_logo, mascot_for as lookup_mascot
 except Exception:
-    def lookup_logo(_: str) -> Optional[str]:
-        return None
+    def lookup_logo(_: str) -> Optional[str]: return None
+    def lookup_mascot(_: str) -> str: return ""
 
-
-# -------------------- PDF helpers --------------------
+# ============================================================
+# PDF helpers
+# ============================================================
 
 def to_pdf_with_soffice(docx_path: str) -> str:
     """Convert DOCX to PDF using LibreOffice. Returns PDF path."""
@@ -71,9 +63,7 @@ def to_pdf_with_soffice(docx_path: str) -> str:
 
 
 def to_pdf(docx_path: str) -> str:
-    """
-    Try docx2pdf (Word) first if installed; otherwise fall back to LibreOffice.
-    """
+    """Try docx2pdf (Word) first; otherwise fall back to LibreOffice."""
     try:
         from docx2pdf import convert as _convert  # type: ignore
         pdf_path = os.path.splitext(docx_path)[0] + ".pdf"
@@ -85,8 +75,9 @@ def to_pdf(docx_path: str) -> str:
     except Exception:
         return to_pdf_with_soffice(docx_path)
 
-
-# -------------------- Logo discovery --------------------
+# ============================================================
+# Logo discovery
+# ============================================================
 
 LOGO_DIRS = [
     "logos/generated_logos",
@@ -94,7 +85,6 @@ LOGO_DIRS = [
     "logos/generated_logo",   # singular, just in case
     "logos",
 ]
-
 IMG_EXTS = [".png", ".jpg", ".jpeg", ".webp", ".bmp"]
 
 
@@ -105,7 +95,7 @@ def _sanitize_name(name: str) -> str:
 
 def find_logo_path(team_or_path: str) -> Optional[str]:
     """
-    If it's a valid file path, use it.
+    If it's an existing file path, use it.
     Else try mascots_util mapping.
     Else scan known logo folders for a close match.
     Returns absolute path or None.
@@ -117,7 +107,7 @@ def find_logo_path(team_or_path: str) -> Optional[str]:
     if p.suffix.lower() in IMG_EXTS and p.exists():
         return str(p.resolve())
 
-    # mascots_util mapping (can point anywhere)
+    # mascots_util mapping (may return any path)
     try:
         m = lookup_logo(team_or_path)
         if m and Path(m).is_file():
@@ -152,8 +142,9 @@ def find_logo_path(team_or_path: str) -> Optional[str]:
 
     return None
 
-
-# -------------------- ESPN adapter --------------------
+# ============================================================
+# ESPN adapter
+# ============================================================
 
 def adapt_games_for_build_context(games_list: List[Any]) -> List[Any]:
     """
@@ -224,7 +215,16 @@ def adapt_games_for_build_context(games_list: List[Any]) -> List[Any]:
     return out
 
 
-# -------------------- Template/context helpers --------------------
+def fetch_week_safe(league_id, year, espn_s2, swid, force_week: Optional[int]):
+    """Call fetch_week_from_espn with or without force_week depending on signature."""
+    try:
+        return fetch_week_from_espn(league_id, year, espn_s2, swid, force_week=force_week)
+    except TypeError:
+        return fetch_week_from_espn(league_id, year, espn_s2, swid)
+
+# ============================================================
+# Template/context helpers
+# ============================================================
 
 def safe_title(s: str) -> str:
     s = re.sub(r"[^\w\s\-\(\)\._]", "_", s)
@@ -233,9 +233,7 @@ def safe_title(s: str) -> str:
 
 
 def add_enumerated_matchups(context: Dict[str, Any], max_slots: int) -> None:
-    """
-    Expand context['games'] into MATCHUPi_* keys for the template.
-    """
+    """Expand context['games'] into MATCHUPi_* keys for the template."""
     games: List[Dict[str, Any]] = context.get("games", []) or []
     for i in range(1, max_slots + 1):
         g = games[i - 1] if i - 1 < len(games) else {}
@@ -264,7 +262,7 @@ def add_enumerated_matchups(context: Dict[str, Any], max_slots: int) -> None:
         context[f"MATCHUP{i}_KEYPLAY"]  = keyplay
         context[f"MATCHUP{i}_DEF"]      = dnote
 
-        # legacy/compat convenience
+        # convenience headline/teams
         try:
             hs_f = float(hs) if hs not in ("", None) else float("nan")
             as_f = float(aS) if aS not in ("", None) else float("nan")
@@ -286,9 +284,7 @@ def add_enumerated_matchups(context: Dict[str, Any], max_slots: int) -> None:
 
 
 def add_template_synonyms(context: Dict[str, Any], slots: int) -> None:
-    """
-    Flatten/alias fields that the Word template might reference.
-    """
+    """Flatten/alias fields that the Word template might reference."""
     context["WEEK_NUMBER"] = context.get("week", context.get("week_num", ""))
     if "WEEKLY_INTRO" not in context:
         context["WEEKLY_INTRO"] = context.get("intro", "")
@@ -305,12 +301,13 @@ def add_template_synonyms(context: Dict[str, Any], slots: int) -> None:
     context["AWARD_KITTY_TEAM"]   = largest_gap.get("desc", "")
     context["AWARD_KITTY_NOTE"]   = str(largest_gap.get("gap", "")) or ""
 
+# ============================================================
+# Branding images
+# ============================================================
 
 def add_logo_images(context: Dict[str, Any], doc: DocxTemplate, max_slots: int, width_mm: int = 25,
                     logo_map: Optional[Dict[str, str]] = None) -> None:
-    """
-    For each matchup i, set MATCHUPi_HOME_LOGO / MATCHUPi_AWAY_LOGO to InlineImage or a placeholder string.
-    """
+    """Set MATCHUPi_HOME_LOGO / MATCHUPi_AWAY_LOGO to InlineImage or a placeholder string."""
     for i in range(1, max_slots + 1):
         home = context.get(f"MATCHUP{i}_HOME", "") or ""
         away = context.get(f"MATCHUP{i}_AWAY", "") or ""
@@ -354,8 +351,9 @@ def add_branding_images(context: Dict[str, Any], doc: DocxTemplate, cfg: Dict[st
     context["SPONSOR_LINE"] = sponsor.get("line", "")
     context["SPONSOR"] = sponsor.get("line", "") or sponsor.get("name", "")
 
-
-# -------------------- LLM blurbs (with safe fallback) --------------------
+# ============================================================
+# LLM blurbs (with fallback + style)
+# ============================================================
 
 BLURB_PROMPT = """You are a sports desk writer crafting vivid weekly fantasy FOOTBALL recaps.
 Write a {words}-word, lively but concise game story in plain text (no markdown or emojis).
@@ -401,7 +399,8 @@ def default_blurb(g: Dict[str, Any]) -> str:
     return " ".join([first] + bits).strip()
 
 
-def maybe_expand_blurbs(ctx: Dict[str, Any], words: int = 160, model: str = "gpt-4o-mini", temperature: float = 0.7) -> None:
+def maybe_expand_blurbs(ctx: Dict[str, Any], words: int = 160, model: str = "gpt-4o-mini",
+                        temperature: float = 0.7, style: str = "default") -> None:
     """Replace/augment each game's 'blurb' using an LLM. Never leaves a game blank."""
     api_key = os.getenv("OPENAI_API_KEY")
     games = ctx.get("games", []) or []
@@ -413,55 +412,98 @@ def maybe_expand_blurbs(ctx: Dict[str, Any], words: int = 160, model: str = "gpt
                 g["blurb"] = default_blurb(g)
         return
 
+    # optional mascot flavor
+    def masc(name: str) -> str:
+        return lookup_mascot(name or "") if style == "mascot" else ""
+
+    # prefer new SDK, fall back to legacy if needed
     try:
-        from openai import OpenAI
+        from openai import OpenAI  # type: ignore
+        client = OpenAI(api_key=api_key)
+        for g in games:
+            baseline = (g.get("blurb") or "").strip() or default_blurb(g)
+            prompt = BLURB_PROMPT
+            if style == "mascot":
+                prompt += "\nMascot descriptors:\n- Home Mascot: {masc_home}\n- Away Mascot: {masc_away}\n"
+            prompt = prompt.format(
+                words=words,
+                home=g.get("home",""), away=g.get("away",""),
+                hs=g.get("hs",""), away_score=g.get("as","") or g.get("ascore",""),
+                top_home=g.get("top_home", g.get("home_top","")),
+                top_away=g.get("top_away", g.get("away_top","")),
+                bust=g.get("biggest_bust", g.get("bust","")),
+                keyplay=g.get("key_play", g.get("keyplay","")),
+                dnote=g.get("defense_note", g.get("def","")),
+                masc_home=masc(g.get("home","")),
+                masc_away=masc(g.get("away","")),
+            )
+            try:
+                resp = client.responses.create(model=model, input=prompt, temperature=temperature)
+                text = (getattr(resp, "output_text", None) or "").strip()
+                g["blurb"] = text if text else baseline
+            except Exception as e:
+                try:
+                    print(f"[warn] LLM blurb failed for {g.get('home','?')} vs {g.get('away','?')}: {e}")
+                except UnicodeEncodeError:
+                    print("[warn] LLM blurb failed (non-ASCII message).")
+                g["blurb"] = baseline
+        return
+    except Exception:
+        pass
+
+    # legacy SDK
+    try:
+        import openai  # type: ignore
+        openai.api_key = api_key
+        for g in games:
+            baseline = (g.get("blurb") or "").strip() or default_blurb(g)
+            prompt = BLURB_PROMPT
+            if style == "mascot":
+                prompt += "\nMascot descriptors:\n- Home Mascot: {masc_home}\n- Away Mascot: {masc_away}\n"
+            prompt = prompt.format(
+                words=words,
+                home=g.get("home",""), away=g.get("away",""),
+                hs=g.get("hs",""), away_score=g.get("as","") or g.get("ascore",""),
+                top_home=g.get("top_home", g.get("home_top","")),
+                top_away=g.get("top_away", g.get("away_top","")),
+                bust=g.get("biggest_bust", g.get("bust","")),
+                keyplay=g.get("key_play", g.get("keyplay","")),
+                dnote=g.get("defense_note", g.get("def","")),
+                masc_home=masc(g.get("home","")),
+                masc_away=masc(g.get("away","")),
+            )
+            try:
+                comp = openai.ChatCompletion.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role":"user","content":prompt}],
+                    temperature=temperature,
+                )
+                text = (comp["choices"][0]["message"]["content"] or "").strip()
+                g["blurb"] = text if text else baseline
+            except Exception as e:
+                print(f"[warn] LLM blurb failed (legacy) for {g.get('home','?')} vs {g.get('away','?')}: {e}")
+                g["blurb"] = baseline
     except Exception as e:
-        print(f"[warn] openai package not available ({e}); using default blurbs.")
+        print(f"[warn] OpenAI SDK unavailable: {e}; using default blurbs.")
         for g in games:
             if not (g.get("blurb") or "").strip():
                 g["blurb"] = default_blurb(g)
-        return
 
-    client = OpenAI(api_key=api_key)
+# ============================================================
+# Rendering
+# ============================================================
 
-    for g in games:
-        baseline = (g.get("blurb") or "").strip() or default_blurb(g)
-        prompt = BLURB_PROMPT.format(
-            words=words,
-            home=g.get("home",""), away=g.get("away",""),
-            hs=g.get("hs",""), away_score=g.get("as","") or g.get("ascore",""),
-            top_home=g.get("top_home", g.get("home_top","")),
-            top_away=g.get("top_away", g.get("away_top","")),
-            bust=g.get("biggest_bust", g.get("bust","")),
-            keyplay=g.get("key_play", g.get("keyplay","")),
-            dnote=g.get("defense_note", g.get("def","")),
-        )
-        try:
-            resp = client.responses.create(model=model, input=prompt, temperature=temperature)
-            text = (getattr(resp, "output_text", None) or "").strip()
-            g["blurb"] = text if text else baseline
-        except Exception as e:
-            try:
-                print(f"[warn] LLM blurb failed for {g.get('home','?')} vs {g.get('away','?')}: {e}")
-            except UnicodeEncodeError:
-                print("[warn] LLM blurb failed (non-ASCII message).")
-            g["blurb"] = baseline
-
-
-# -------------------- Rendering --------------------
-
-def _safe_get_missing(doc, ctx) -> list[str]:
-    """Return undeclared variables if the installed docxtpl supports it; otherwise be silent."""
+def _safe_get_missing(doc: DocxTemplate) -> List[str]:
+    """Return undeclared variables if docxtpl supports it; otherwise be silent."""
     try:
         # Most versions expose a zero-arg variant
         missing = doc.get_undeclared_template_variables()
         return sorted(missing) if missing else []
     except TypeError:
-        # Some very old versions take a Jinja2 Environment instead; skip to avoid breaking runs
+        # Some very old versions take a Jinja2 Environment; skip to avoid breaking runs
         return []
     except Exception:
         return []
-
 
 
 def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple[str, Optional[str], Dict[str, str]]:
@@ -479,7 +521,7 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
             "games": [],
         }
     else:
-        raw_games = fetch_week_from_espn(league_id, year, espn_s2, swid, force_week=args.week)
+        raw_games = fetch_week_safe(league_id, year, espn_s2, swid, force_week=args.week)
         games = adapt_games_for_build_context(raw_games)
         ctx = build_context(cfg, games)
 
@@ -488,9 +530,17 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
         if args.week_label:        ctx["week"] = args.week_label
         if args.date:              ctx["date"] = args.date
 
-        # Expand blurbs (with fallback)
-        if args.llm_blurbs:
-            maybe_expand_blurbs(ctx, words=args.blurb_words, model=args.model, temperature=args.temperature)
+        # Decide blurbs behavior from CLI or leagues.json
+        use_blurbs = args.llm_blurbs or bool(cfg.get("blurbs", False))
+        style = args.blurb_style or cfg.get("blurb_style", "default")
+
+        if use_blurbs:
+            maybe_expand_blurbs(ctx,
+                words=args.blurb_words,
+                model=args.model,
+                temperature=args.temperature,
+                style=style
+            )
 
     # Per-matchup keys + synonyms + branding
     add_enumerated_matchups(ctx, max_slots=args.slots)
@@ -502,7 +552,7 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
     add_branding_images(ctx, doc, cfg)
 
     # Helpful warning during template editing
-    missing = _safe_get_missing(doc, ctx)
+    missing = _safe_get_missing(doc)
     if missing:
         print(f"[warn] Template references unknown variables: {missing}")
 
@@ -530,8 +580,9 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
 
     return str(docx_path), pdf_path, logo_map
 
-
-# -------------------- CLI --------------------
+# ============================================================
+# CLI
+# ============================================================
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
@@ -550,10 +601,12 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--branding-test", action="store_true", help="Render a minimal doc to verify logos/template (no ESPN).")
 
     # LLM blurbs
-    ap.add_argument("--llm-blurbs", action="store_true", help="Generate longer blurbs with OpenAI.")
+    ap.add_argument("--llm-blurbs", action="store_true", help="Generate longer blurbs with OpenAI (falls back safely).")
     ap.add_argument("--blurb-words", type=int, default=160, help="Target words for LLM blurbs.")
     ap.add_argument("--model", default="gpt-4o-mini", help="OpenAI model for blurbs.")
     ap.add_argument("--temperature", type=float, default=0.7, help="LLM temperature for blurbs.")
+    ap.add_argument("--blurb-style", choices=["default", "mascot"], default=None,
+                    help="Blurb writing style. If omitted, uses leagues.json blurb_style or 'default'.")
     return ap.parse_args()
 
 
