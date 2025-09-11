@@ -450,17 +450,18 @@ def maybe_expand_blurbs(ctx: Dict[str, Any], words: int = 160, model: str = "gpt
 
 # -------------------- Rendering --------------------
 
-def _safe_get_missing(doc: DocxTemplate, ctx: Dict[str, Any]) -> List[str]:
-    """Return a best-effort list of undeclared variables; tolerant to docxtpl versions."""
+def _safe_get_missing(doc, ctx) -> list[str]:
+    """Return undeclared variables if the installed docxtpl supports it; otherwise be silent."""
     try:
-        missing = doc.get_undeclared_template_variables(ctx)  # newer docxtpl
+        # Most versions expose a zero-arg variant
+        missing = doc.get_undeclared_template_variables()
         return sorted(missing) if missing else []
     except TypeError:
-        try:
-            missing = doc.get_undeclared_template_variables()  # older docxtpl
-            return sorted(missing) if missing else []
-        except Exception:
-            return []
+        # Some very old versions take a Jinja2 Environment instead; skip to avoid breaking runs
+        return []
+    except Exception:
+        return []
+
 
 
 def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple[str, Optional[str], Dict[str, str]]:
