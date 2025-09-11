@@ -27,28 +27,6 @@ from typing import Any, Dict, List, Optional, Tuple
 # Third-party
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
-from gazette_data import build_context, fetch_week_from_espn
-from gazette_runner import add_enumerated_matchups, add_template_synonyms
-import json
-
-tpl = DocxTemplate("recap_template.docx")
-cfg = json.load(open("leagues.json"))[0]
-games = fetch_week_from_espn(cfg["league_id"], cfg["year"], cfg.get("espn_s2", ""), cfg.get("swid", ""))
-ctx = build_context(cfg, games)
-
-# Print out the context structure to check it
-print("Context keys:", list(ctx.keys()))
-
-add_enumerated_matchups(ctx, max_slots=12)
-add_template_synonyms(ctx, slots=12)
-
-# After we build the context, check the undeclared variables
-#try:
-#   print(sorted(tpl.get_undeclared_template_variables(ctx)))
-#except Exception as e:
-#   print(f"Error while getting undeclared template variables: {e}")
-
-
 
 # Local modules in this repo
 # - gazette_data: expected to provide build_context(...) and fetch_week_from_espn(...)
@@ -319,7 +297,6 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
     base = safe_title(f"Gazette_{week_label}_{date_label}") if date_label else safe_title(f"Gazette_{week_label}")
 
     docx_path = out_dir / f"{base}.docx"
-    print("Context Keys:", list(ctx.keys()))
     doc.render(ctx)
     doc.save(str(docx_path))
 
