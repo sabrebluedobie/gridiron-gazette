@@ -47,7 +47,7 @@ CONFIG = {
     "CSV_PATH": "sample_clients.csv",
     "JSON_PATH": "sample_clients.json",
     "OUTPUT_DIR": "out",
-    "DEFAULT_LOGO_PATH": "assets/logo.png",
+    "DEFAULT_LOGO_PATH": "logos/gazette_logo.PNG",
     "LOGO_WIDTH_MM": 30,
     "WEEK_NUMBER": "",
     # Drive defaults

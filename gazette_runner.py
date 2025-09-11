@@ -12,28 +12,54 @@ from docx.shared import Mm
 from gazette_data import fetch_week_from_espn, build_context
 from mascots_util import logo_for
 
+# --- PDF helpers (drop-in replacement) ---
+import os, subprocess
+
 def to_pdf_with_soffice(docx_path: str) -> str:
-    import os, subprocess, shutil
+    """Convert DOCX to PDF using LibreOffice. Returns the PDF path."""
     outdir = os.path.dirname(docx_path) or "."
+    pdf_path = os.path.splitext(docx_path)[0] + ".pdf"
     cmd = ["soffice", "--headless", "--convert-to", "pdf", "--outdir", outdir, docx_path]
     try:
         subprocess.run(cmd, check=True)
     except Exception:
-        # fallback to absolute path (Homebrew sometimes doesn’t symlink)
+        # Homebrew sometimes doesn't symlink; use absolute path
         cmd[0] = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
         subprocess.run(cmd, check=True)
-    return os.path.splitext(docx_path)[0] + ".pdf"
+    return pdf_path
+
+import os, subprocess
+
+def to_pdf_with_soffice(docx_path: str) -> str:
+    """Convert DOCX to PDF using LibreOffice. Returns the PDF path."""
+    outdir = os.path.dirname(docx_path) or "."
+    pdf_path = os.path.splitext(docx_path)[0] + ".pdf"
+    cmd = ["soffice", "--headless", "--convert-to", "pdf", "--outdir", outdir, docx_path]
+    try:
+        subprocess.run(cmd, check=True)
+    except Exception:
+        cmd[0] = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+        subprocess.run(cmd, check=True)
+    return pdf_path
+
+def to_pdf(docx_path: str) -> str:
+    """
+    Try Word (docx2pdf) first; if it fails or isn't available, fall back to LibreOffice.
+    Returns the PDF path.
+    """
+    pdf_path = os.path.splitext(docx_path)[0] + ".pdf"
+    try:
+        from docx2pdf import convert as _convert
+        try:
+            _convert(docx_path, pdf_path)
+            return pdf_path
+        except Exception:
+            return to_pdf_with_soffice(docx_path)
+    except Exception:
+        return to_pdf_with_soffice(docx_path)
 
 # Try docx2pdf if available (Mac/Windows with Word); fall back to LibreOffice
-try:
-    from docx2pdf import convert as _convert
-    # Word sometimes fails on mac; try it, but fall back to soffice.
-    try:
-        _convert(out_docx, os.path.splitext(out_docx)[0] + ".pdf")
-    except Exception:
-        to_pdf_with_soffice(out_docx)
-except Exception:
-    to_pdf_with_soffice(out_docx)
+# (This logic is now handled inside the to_pdf function below.)
 
 
 def _safe(s: str) -> str:
@@ -101,7 +127,7 @@ def add_logo_images(context: Dict[str, Any], doc: DocxTemplate, max_slots: int =
 
 
 def render_docx(context: Dict[str, Any], template="recap_template.docx",
-                out_root="recaps", slots: int = 12, logo_mm: float = 18.0) -> str:
+                out_dir = render_docx(ctx, template=args.template), slots=args.slots,logo_mm=args.logo_mm) -> str:
     add_enumerated_matchups(context, max_slots=slots)
 
     league = context.get("league", "League")
@@ -163,14 +189,22 @@ def run_single(cfg: Dict[str, Any], args) -> List[str]:
     if args.date:
         ctx["date"] = args.date
 
-    out_docx = render_docx(ctx, template=args.template, out_root=args.out_dir,
-                           slots=args.slots, logo_mm=args.logo_mm)
-    outputs = [out_docx]
-    if args.pdf:
-        pdf = to_pdf(out_docx)
-        if pdf:
-            outputs.append(pdf)
-    return outputs
+    out_docx = render_docx(
+    ctx,
+    template=args.template,
+    out_dir=args.out_dir,      # <-- not out_root
+    slots=args.slots,
+    logo_mm=args.logo_mm,
+)
+print(f"Wrote DOCX: {out_docx}")
+
+if args.pdf:
+    pdf = to_pdf(out_docx)
+    print(f"Wrote PDF:  {pdf}")
+    outputs = [out_docx, pdf] if args.pdf else [out_docx]
+
+
+
 
 def main():
     ap = argparse.ArgumentParser(description="Gridiron Gazette (ESPN -> DOCX/PDF), single or multi, enumerated placeholders.")
