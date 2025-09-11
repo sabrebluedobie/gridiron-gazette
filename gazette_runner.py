@@ -41,6 +41,59 @@ try:
 except Exception:
     def lookup_logo(_: str) -> Optional[str]:
         return None
+    
+
+BLURB_PROMPT = """You are a sports desk writer crafting vivid weekly fantasy FOOTBALL recaps.
+Write a {words}-word, lively but concise game story in plain text (no markdown or emojis).
+Include: who won, final fantasy score, the pivotal moment, and 1–2 standout performers.
+If any detail is missing, gracefully skip it without inventing facts.
+
+Context:
+- Home: {home}  Away: {away}
+- Final: {hs}-{as}
+- Top (Home): {top_home}
+- Top (Away): {top_away}
+- Biggest Bust: {bust}
+- Key Play: {keyplay}
+- Defense Note: {dnote}
+Tone: energetic local-paper style. Avoid clichés. One tight paragraph.
+"""
+
+def maybe_expand_blurbs(ctx, words: int = 160, model: str = "gpt-4o-mini", temperature: float = 0.7):
+    """Replace/augment each game's 'blurb' using an LLM. Requires OPENAI_API_KEY."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        print("[warn] --llm-blurbs set but OPENAI_API_KEY not found; skipping expansion.")
+        return
+
+    try:
+        from openai import OpenAI
+    except Exception as e:
+        print(f"[warn] openai package not available ({e}); skipping expansion.")
+        return
+
+    client = OpenAI(api_key=api_key)
+    games = ctx.get("games", []) or []
+    for g in games:
+        prompt = BLURB_PROMPT.format(
+            words=words,
+            home=g.get("home",""), away=g.get("away",""),
+            hs=g.get("hs",""), as_=g.get("as",""),
+            top_home=g.get("top_home",""), top_away=g.get("top_away",""),
+            bust=g.get("bust",""), keyplay=g.get("keyplay",""), dnote=g.get("def","")
+        ).replace("{as}", str(g.get("as","")))  # keep {as} safe if appears
+
+        try:
+            resp = client.responses.create(
+                model=model,
+                input=prompt,
+                temperature=temperature,
+            )
+            text = resp.output_text.strip()
+            if text:
+                g["blurb"] = text
+        except Exception as e:
+            print(f"[warn] LLM blurb failed for {g.get('home','?')} vs {g.get('away','?')}: {e}")
 
 # ---------------- PDF helpers ----------------
 
@@ -284,6 +337,12 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
     year      = cfg.get("year")
     espn_s2   = cfg.get("espn_s2", "")
     swid      = cfg.get("swid", "")
+    games = fetch_week_from_espn(league_id, year, espn_s2, swid)
+    ctx = build_context(cfg, games)
+
+    if args.llm_blurbs:
+        maybe_expand_blurbs(ctx, words=args.blurb_words, model=args.model, temperature=args.temperature)
+
 
     if args.branding_test:
         # Minimal context just to prove branding & layout without ESPN calls
@@ -366,6 +425,11 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--logo-mm", type=int, default=25, help="Logo width in millimeters.")
     ap.add_argument("--print-logo_map", dest="print_logo_map", action="store_true", help="Print which logo file was used.")
     ap.add_argument("--branding-test", action="store_true", help="Skip ESPN fetch; render branding-only context.")
+    ap.add_argument("--llm-blurbs", action="store_true", help="Generate longer blurbs with OpenAI.")
+    ap.add_argument("--blurb-words", type=int, default=160, help="Target words for LLM blurbs.")
+    ap.add_argument("--model", default="gpt-4o-mini", help="OpenAI model for blurbs.")
+    ap.add_argument("--temperature", type=float, default=0.7, help="LLM temperature for blurbs.")
+
     return ap.parse_args()
 
 
