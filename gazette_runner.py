@@ -15,6 +15,8 @@ Examples:
 """
 
 from __future__ import annotations
+from types import SimpleNamespace
+
 
 import argparse
 import json
@@ -370,6 +372,41 @@ def add_branding(ctx: Dict[str, Any], doc: DocxTemplate, cfg: Dict[str, Any], lo
 
     return logo_map
 
+def adapt_games_for_build_context(games_list):
+    """Ensure each game has attribute-style access for build_context."""
+    out = []
+    for g in games_list or []:
+        if isinstance(g, dict):
+            home = g.get("home", "")
+            away = g.get("away", "")
+            hs   = g.get("hs", "")
+            a_sc = g.get("as", "")
+            # optional extras your pipeline may use
+            top_home = g.get("top_home", "")
+            top_away = g.get("top_away", "")
+            bust     = g.get("bust", "")
+            keyplay  = g.get("keyplay", "")
+            dnote    = g.get("def", "")
+            blurb    = g.get("blurb", "")
+            # give build_context multiple, friendly attribute names
+            out.append(
+                SimpleNamespace(
+                    home=home, away=away,
+                    hs=hs, as_=a_sc,                 # safe (can't use .as)
+                    home_score=hs, away_score=a_sc, # common alternates
+                    score_home=hs, score_away=a_sc,
+                    top_home=top_home, top_away=top_away,
+                    bust=bust, keyplay=keyplay,
+                    dnote=dnote, defense=dnote,
+                    blurb=blurb,
+                )
+            )
+        else:
+            # already an object from espn_api? keep as-is
+            out.append(g)
+    return out
+
+
 
 # ---------------- Rendering ------------------
 
@@ -386,7 +423,8 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
     year      = cfg.get("year")
     espn_s2   = cfg.get("espn_s2", "")
     swid      = cfg.get("swid", "")
-    games = fetch_week_from_espn(league_id, year, espn_s2, swid, force_week=args.week)
+    raw_games = fetch_week_from_espn(league_id, year, espn_s2, swid, force_week=args.week)
+    games = adapt_games_for_build_context(raw_games)
     ctx = build_context(cfg, games)
 
     if args.llm_blurbs:
