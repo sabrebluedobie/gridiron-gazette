@@ -283,9 +283,9 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
     add_template_synonyms(ctx, slots=args.slots)
 
     # Missing placeholders check (useful when editing the template)
-    missing = doc.get_undeclared_template_variables(ctx)
-    if missing:
-        print(f"[warn] Template references unknown variables: {sorted(missing)}")
+    #missing = doc.#get_undeclared_template_variables(ctx)
+    #if missing:
+     #   print(f"[warn] Template references unknown variables: {sorted(missing)}")
 
     # Output paths
     league_name = cfg.get("name", f"league_{league_id}") or f"league_{league_id}"
@@ -297,6 +297,7 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
     base = safe_title(f"Gazette_{week_label}_{date_label}") if date_label else safe_title(f"Gazette_{week_label}")
 
     docx_path = out_dir / f"{base}.docx"
+    print("Context Keys;", list(ctx.keys()))
     doc.render(ctx)
     doc.save(str(docx_path))
 
