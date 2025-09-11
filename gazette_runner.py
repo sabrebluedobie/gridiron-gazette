@@ -372,39 +372,52 @@ def add_branding(ctx: Dict[str, Any], doc: DocxTemplate, cfg: Dict[str, Any], lo
 
     return logo_map
 
+from types import SimpleNamespace
+
 def adapt_games_for_build_context(games_list):
-    """Ensure each game has attribute-style access for build_context."""
+    """Normalize game dicts/objects so build_context can use attribute access like g.home, g.away, g.hs, g.ascore."""
+    def coerce_num(x):
+        try:
+            return float(x)
+        except Exception:
+            return x
+
     out = []
     for g in games_list or []:
         if isinstance(g, dict):
-            home = g.get("home", "")
-            away = g.get("away", "")
-            hs   = g.get("hs", "")
-            a_sc = g.get("as", "")
-            # optional extras your pipeline may use
-            top_home = g.get("top_home", "")
-            top_away = g.get("top_away", "")
-            bust     = g.get("bust", "")
-            keyplay  = g.get("keyplay", "")
-            dnote    = g.get("def", "")
-            blurb    = g.get("blurb", "")
-            # give build_context multiple, friendly attribute names
-            out.append(
-                SimpleNamespace(
-                    home=home, away=away,
-                    hs=hs, as_=a_sc,                 # safe (can't use .as)
-                    home_score=hs, away_score=a_sc, # common alternates
-                    score_home=hs, score_away=a_sc,
-                    top_home=top_home, top_away=top_away,
-                    bust=bust, keyplay=keyplay,
-                    dnote=dnote, defense=dnote,
-                    blurb=blurb,
-                )
-            )
+            home = g.get("home") or g.get("home_team") or ""
+            away = g.get("away") or g.get("away_team") or ""
+
+            # collect score candidates and coerce to float when possible
+            hs = g.get("hs", g.get("home_score", g.get("hscore", g.get("score_home", ""))))
+            a  = g.get("as", g.get("away_score", g.get("ascore", g.get("score_away", ""))))
+            hs = coerce_num(hs)
+            a  = coerce_num(a)
+
+            out.append(SimpleNamespace(
+                # names most build_contexts use
+                home=home, away=away,
+                hs=hs,             # home score
+                ascore=a,          # away score (explicit alias expected by your build_context)
+                # convenient alternates some code paths may read
+                hscore=hs, home_score=hs, score_home=hs,
+                away_score=a, score_away=a,
+                # spotlight / blurb fields (safe defaults)
+                top_home=g.get("top_home", ""), top_away=g.get("top_away", ""),
+                bust=g.get("bust", ""), keyplay=g.get("keyplay", ""),
+                dnote=g.get("def", "") or g.get("dnote", ""),
+                defense=g.get("def", "") or g.get("dnote", ""),
+                blurb=g.get("blurb", ""),
+            ))
         else:
-            # already an object from espn_api? keep as-is
+            # If it's already an object (e.g., from espn_api), ensure aliases exist
+            if not hasattr(g, "ascore") and hasattr(g, "away_score"):
+                setattr(g, "ascore", getattr(g, "away_score"))
+            if not hasattr(g, "hs") and hasattr(g, "home_score"):
+                setattr(g, "hs", getattr(g, "home_score"))
             out.append(g)
     return out
+
 
 
 
