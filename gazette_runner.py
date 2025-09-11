@@ -341,7 +341,7 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
     year      = cfg.get("year")
     espn_s2   = cfg.get("espn_s2", "")
     swid      = cfg.get("swid", "")
-    games = fetch_week_from_espn(league_id, year, espn_s2, swid)
+    games = fetch_week_from_espn(league_id, year, espn_s2, swid, force_week=args.week)
     ctx = build_context(cfg, games)
 
     if args.llm_blurbs:
@@ -360,7 +360,7 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
         }
         ctx = base_ctx
     else:
-        games = fetch_week_from_espn(league_id, year, espn_s2, swid)
+        games = fetch_week_from_espn(league_id, year, espn_s2, swid, force_week=args.week)
         ctx = build_context(cfg, games)
 
     # CLI overrides

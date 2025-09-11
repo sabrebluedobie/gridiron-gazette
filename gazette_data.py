@@ -132,27 +132,22 @@ def _ai_blurb(home: str, away: str, hs: float, ascore: float,
 
 # ---------- ESPN fetch & context ----------
 
-def fetch_week_from_espn(league_id: int, year: int, ***REMOVED***
-    """Richer fetch using box_scores (works with public; for private pass cookies)."""
-    if League is None:
-        raise RuntimeError("espn-api not installed. Run: pip install espn-api")
-    league = League(league_id=league_id, year=year, ***REMOVED***
-    wk = week or getattr(league, "current_week", None) or 1
-    boxes = league.box_scores(wk)
-    games: List[Game] = []
-    for b in boxes:
-        home_name = getattr(b.home_team, "team_name", str(getattr(b.home_team, "name", "Home")))
-        away_name = getattr(b.away_team, "team_name", str(getattr(b.away_team, "name", "Away")))
-        hs = _fnum(getattr(b, "home_score", 0))
-        ascore = _fnum(getattr(b, "away_score", 0))
-        htop = _top_scorer(getattr(b, "home_lineup", []) or [])
-        atop = _top_scorer(getattr(b, "away_lineup", []) or [])
-        home_top = f"{htop[0]} {htop[1]:.1f} pts ({htop[2]})" if htop else None
-        away_top = f"{atop[0]} {atop[1]:.1f} pts ({atop[2]})" if atop else None
-        bust = _biggest_bust(getattr(b, "home_lineup", []) or [], getattr(b, "away_lineup", []) or [])
-        games.append(Game(home=home_name, away=away_name, hs=hs, ascore=ascore,
-                          home_top=home_top, away_top=away_top, biggest_bust=bust))
+def fetch_week_from_espn(league_id, year, espn_s2, swid, force_week=None):
+    from espn_api.football import League
+    lg = League(league_id=league_id, year=year, ***REMOVED***
+    week = int(force_week) if force_week else getattr(lg, "current_week", None)
+    # Prefer last completed week if your lib exposes it; otherwise use week
+    games = []
+    for m in lg.scoreboard(week=week):
+        games.append({
+            "home": m.home_team.team_name,
+            "away": m.away_team.team_name,
+            "hs":   m.home_score,
+            "as":   m.away_score,
+            # fill the rest as you were (top_home, bust, etc.)
+        })
     return games
+
 
 def _awards(games: List[Game]) -> Dict[str, Any]:
     if not games:
