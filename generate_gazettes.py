@@ -1,270 +1,362 @@
 #!/usr/bin/env python3
 """
-Batch-generate Gridiron Gazette newsletters from a Word template (set-it-and-forget-it),
-then optionally upload to Google Drive and email clients a share link + attachment.
+Generate styled Weekly Gazette DOCX/PDF files for one or many leagues.
 
-SETUP CHECKLIST
-1) pip install -r requirements.txt
-2) Google Cloud: Enable "Google Drive API" and "Gmail API" for your project.
-3) OAuth client (Desktop app) -> download credentials.json to this folder.
-4) First run will open a browser to grant access; token.json will be saved for reuse.
+- Reads leagues from --leagues (default: leagues.json)
+- Pulls matchup data via gazette_data.fetch_week_from_espn
+- Builds context via gazette_data.build_context
+- Adds per-slot (MATCHUPi_*) keys and image placeholders for team logos
+- Renders with docxtpl and (optionally) converts to PDF via LibreOffice
 
-RUN
-python generate_gazettes.py --upload --email
-
-ENV / CONFIG
-- sample_settings.json controls template, input, output, defaults
-- Optional per-row overrides: DRIVE_FOLDER_ID, CLIENT_EMAIL
+Usage:
+  python3 generate_gazettes.py --slots 10 --pdf
+  python3 generate_gazettes.py --league "My League" --week 1 --slots 8
+  python3 generate_gazettes.py --print-logo-map
 """
 
-import os
-import sys
-import csv
-import json
-import base64
-import pathlib
-import argparse
-from typing import Dict, Any, List
+from __future__ import annotations
 
+import argparse
+import json
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+# Third-party
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 
-# Google APIs
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+# Local modules in this repo
+# - gazette_data: expected to provide build_context(...) and fetch_week_from_espn(...)
+# - mascots_util: expected to provide logo_for(team_name: str) -> Optional[str]
+try:
+    from gazette_data import build_context, fetch_week_from_espn
+except Exception as e:
+    print("[error] Unable to import gazette_data. Make sure you're running from the repo root.", file=sys.stderr)
+    raise
 
-# ---------- SCOPES ----------
-DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.file']
-GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.send']
+try:
+    from mascots_util import logo_for as lookup_logo
+except Exception:
+    # Fallback shim if mascots_util isn't available for some reason
+    def lookup_logo(_: str) -> Optional[str]:
+        return None
 
-# ---------- CONFIG ----------
-CONFIG = {
-    "TEMPLATE_PATH": "Gridiron_Gazette_Recap_Template.docx",
-    "INPUT_MODE": "csv",                 # "csv" or "json"
-    "CSV_PATH": "sample_clients.csv",
-    "JSON_PATH": "sample_clients.json",
-    "OUTPUT_DIR": "out",
-    "DEFAULT_LOGO_PATH": "logos/gazette_logo.PNG",
-    "LOGO_WIDTH_MM": 30,
-    "WEEK_NUMBER": "",
-    # Drive defaults
-    "DEFAULT_DRIVE_FOLDER_ID": "",       # If blank, create Week folder under a root chosen on first upload
-    # Email defaults
-    "DEFAULT_FROM_EMAIL": "",            # If blank, Gmail API uses the authorized account
-    "DEFAULT_SUBJECT": "Your Weekly Gridiron Gazette",
-    "DEFAULT_MESSAGE": "Hi {{CLIENT_NAME}},\n\nYour Week {{WEEK_NUMBER}} Gazette is ready. Link below and file attached.\n\nThanks!",
-}
 
-PLACEHOLDER_KEYS = [
-    "WEEK_NUMBER", "WEEKLY_INTRO",
-    "MATCHUP1_TEAMS","MATCHUP1_HEADLINE","MATCHUP1_BODY","MATCHUP1_TOP_HOME","MATCHUP1_TOP_AWAY","MATCHUP1_BUST","MATCHUP1_KEYPLAY","MATCHUP1_DEF",
-    "MATCHUP2_TEAMS","MATCHUP2_HEADLINE","MATCHUP2_BODY","MATCHUP2_TOP_HOME","MATCHUP2_TOP_AWAY","MATCHUP2_BUST","MATCHUP2_KEYPLAY","MATCHUP2_DEF",
-    "MATCHUP3_TEAMS","MATCHUP3_HEADLINE","MATCHUP3_BODY","MATCHUP3_TOP_HOME","MATCHUP3_TOP_AWAY","MATCHUP3_BUST","MATCHUP3_KEYPLAY","MATCHUP3_DEF",
-    "MATCHUP4_TEAMS","MATCHUP4_HEADLINE","MATCHUP4_BODY","MATCHUP4_TOP_HOME","MATCHUP4_TOP_AWAY","MATCHUP4_BUST","MATCHUP4_KEYPLAY","MATCHUP4_DEF",
-    "MATCHUP5_TEAMS","MATCHUP5_HEADLINE","MATCHUP5_BODY","MATCHUP5_TOP_HOME","MATCHUP5_TOP_AWAY","MATCHUP5_BUST","MATCHUP5_KEYPLAY","MATCHUP5_DEF",
-    "MATCHUP6_TEAMS","MATCHUP6_HEADLINE","MATCHUP6_BODY","MATCHUP6_TOP_HOME","MATCHUP6_TOP_AWAY","MATCHUP6_BUST","MATCHUP6_KEYPLAY","MATCHUP6_DEF",
-    "AWARD_CUPCAKE_TEAM","AWARD_CUPCAKE_NOTE",
-    "AWARD_KITTY_TEAM","AWARD_KITTY_NOTE",
-    "AWARD_TOP_TEAM","AWARD_TOP_NOTE",
-    "AWARD_PLAY_NOTE","AWARD_MANAGER_NOTE",
-    "FOOTER_NOTE",
+# ---------- PDF helpers (LibreOffice, no Word needed) ----------
+import subprocess
+
+
+def to_pdf_with_soffice(docx_path: str) -> str:
+    """Convert DOCX to PDF using LibreOffice. Returns the PDF path."""
+    outdir = os.path.dirname(docx_path) or "."
+    pdf_path = os.path.splitext(docx_path)[0] + ".pdf"
+    cmd = ["soffice", "--headless", "--convert-to", "pdf", "--outdir", outdir, docx_path]
+    try:
+        subprocess.run(cmd, check=True)
+    except Exception:
+        # Homebrew sometimes doesn't symlink; use the app path directly
+        cmd[0] = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+        subprocess.run(cmd, check=True)
+    return pdf_path
+
+
+def to_pdf(docx_path: str) -> str:
+    """
+    Try docx2pdf (Word) first if installed; fall back to LibreOffice.
+    """
+    try:
+        from docx2pdf import convert as _convert  # type: ignore
+        try:
+            pdf_path = os.path.splitext(docx_path)[0] + ".pdf"
+            _convert(docx_path, pdf_path)
+            return pdf_path
+        except Exception:
+            return to_pdf_with_soffice(docx_path)
+    except Exception:
+        return to_pdf_with_soffice(docx_path)
+
+
+# ---------- Logo discovery helpers ----------
+LOGO_DIRS = [
+    "logos/ai",
+    "logos/generated_logos",
+    "logos/generated_logo",   # singular (you mentioned this case)
+    "logos",
 ]
 
-def load_settings(config_path="sample_settings.json"):
-    if os.path.exists(config_path):
-        with open(config_path, "r", encoding="utf-8") as f:
-            CONFIG.update(json.load(f))
 
-def load_rows() -> List[Dict[str, Any]]:
-    mode = CONFIG["INPUT_MODE"].lower()
-    if mode == "csv":
-        rows = []
-        with open(CONFIG["CSV_PATH"], newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                rows.append(row)
-        return rows
-    elif mode == "json":
-        with open(CONFIG["JSON_PATH"], "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, list) else data.get("rows", [])
-    else:
-        raise ValueError("INPUT_MODE must be 'csv' or 'json'")
+def _sanitize_name(name: str) -> str:
+    # Normalize to a filesystem-friendly base (e.g., "Nana's Hawks" -> "Nana_s_Hawks")
+    base = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")
+    base = re.sub(r"_+", "_", base)
+    return base
 
-# ---------- Auth Helpers ----------
-def get_creds(scopes, token_file, cred_file="credentials.json") -> Credentials:
-    creds = None
-    if os.path.exists(token_file):
-        creds = Credentials.from_authorized_user_file(token_file, scopes)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+
+def find_logo_path(team: str) -> Optional[str]:
+    """
+    Consolidated logo lookup:
+      1) mascots_util.logo_for(team)
+      2) search known logo directories for a sensible filename
+    Returns absolute path if found, else None.
+    """
+    # 1) try mascots_util mapping
+    try:
+        p = lookup_logo(team)
+        if p and Path(p).is_file():
+            return str(Path(p).resolve())
+    except Exception:
+        pass
+
+    # 2) scan directories
+    candidates: List[Path] = []
+    sanitized = _sanitize_name(team).lower()
+    exts = [".png", ".jpg", ".jpeg", ".webp", ".bmp"]
+
+    for d in LOGO_DIRS:
+        base = Path(d)
+        if not base.exists():
+            continue
+
+        # Try exact sanitized filename
+        for ext in exts:
+            cand = base / f"{sanitized}{ext}"
+            if cand.is_file():
+                return str(cand.resolve())
+
+        # Try loose contains match (case-insensitive)
+        try:
+            for f in base.glob("*"):
+                if f.is_file() and f.suffix.lower() in exts:
+                    if sanitized in f.stem.lower():
+                        candidates.append(f.resolve())
+        except Exception:
+            pass
+
+    if candidates:
+        # Choose shortest name as "best" match
+        best = sorted(candidates, key=lambda p: len(p.name))[0]
+        return str(best)
+
+    return None
+
+
+def add_logo_images(context: Dict[str, Any], doc: DocxTemplate, max_slots: int, width_mm: int = 25,
+                    logo_map: Optional[Dict[str, str]] = None) -> None:
+    """
+    For each matchup i, add MATCHUPi_HOME_LOGO / MATCHUPi_AWAY_LOGO InlineImages into the context.
+    If no image is found, set a visible fallback string "[no-logo]" so it's obvious in the doc.
+    Optionally collect a {team: path} logo_map for printing.
+    """
+    for i in range(1, max_slots + 1):
+        home = context.get(f"MATCHUP{i}_HOME", "") or ""
+        away = context.get(f"MATCHUP{i}_AWAY", "") or ""
+
+        # Home logo
+        hp = find_logo_path(home) if home else None
+        if hp and Path(hp).is_file():
+            context[f"MATCHUP{i}_HOME_LOGO"] = InlineImage(doc, hp, width=Mm(width_mm))
+            if logo_map is not None:
+                logo_map[home] = hp
         else:
-            if not os.path.exists(cred_file):
-                raise FileNotFoundError(
-                    f"Missing {cred_file}. Create OAuth client (Desktop) in Google Cloud and download it here."
-                )
-            flow = InstalledAppFlow.from_client_secrets_file(cred_file, scopes)
-            creds = flow.run_local_server(port=0)
-        with open(token_file, 'w', encoding='utf-8') as token:
-            token.write(creds.to_json())
-    return creds
+            context[f"MATCHUP{i}_HOME_LOGO"] = "[no-logo]"
 
-# ---------- Drive ----------
-def ensure_drive_folder(service, name: str, parent_id: str = None) -> str:
-    """Return folder ID with given name under parent_id (or root). Create if absent."""
-    query = f"name='{name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-    if parent_id:
-        query += f" and '{parent_id}' in parents"
-    results = service.files().list(q=query, spaces='drive', fields="files(id, name)").execute()
-    files = results.get('files', [])
-    if files:
-        return files[0]['id']
-    metadata = {'name': name, 'mimeType': 'application/vnd.google-apps.folder'}
-    if parent_id:
-        metadata['parents'] = [parent_id]
-    folder = service.files().create(body=metadata, fields='id').execute()
-    return folder['id']
+        # Away logo
+        ap = find_logo_path(away) if away else None
+        if ap and Path(ap).is_file():
+            context[f"MATCHUP{i}_AWAY_LOGO"] = InlineImage(doc, ap, width=Mm(width_mm))
+            if logo_map is not None:
+                logo_map[away] = ap
+        else:
+            context[f"MATCHUP{i}_AWAY_LOGO"] = "[no-logo]"
 
-def upload_to_drive(drive_service, local_path: str, folder_id: str) -> str:
-    file_metadata = {'name': os.path.basename(local_path), 'parents': [folder_id]}
-    media = MediaFileUpload(local_path, mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document", resumable=True)
-    f = drive_service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
-    # Make link accessible to anyone with link (optional; comment out if not desired)
-    drive_service.permissions().create(fileId=f['id'], body={'type': 'anyone', 'role': 'reader'}).execute()
-    return f['webViewLink']
 
-# ---------- Gmail ----------
-from email.mime.base import MIMEBase
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email import encoders
+# ---------- Context mapping helpers ----------
+def add_enumerated_matchups(context: Dict[str, Any], max_slots: int) -> None:
+    """
+    Expand context['games'] list into numbered keys the template uses:
+    MATCHUPi_HOME, _AWAY, _HS, _AS, _BLURB, spotlight stats, plus legacy TEAMS/HEADLINE/BODY.
+    """
+    games: List[Dict[str, Any]] = context.get("games", []) or []
+    for i in range(1, max_slots + 1):
+        g = games[i - 1] if i - 1 < len(games) else {}
 
-def create_message_with_attachment(sender, to, subject, message_text, file_path):
-    message = MIMEMultipart()
-    message['to'] = to
-    message['from'] = sender
-    message['subject'] = subject
+        home = g.get("home", "") or ""
+        away = g.get("away", "") or ""
+        hs = g.get("hs", "")
+        aS = g.get("as", "")  # 'as' is a keyword; we keep the dict key but store as aS var
 
-    msg = MIMEText(message_text)
-    message.attach(msg)
+        blurb = g.get("blurb", "") or ""
+        top_home = g.get("top_home", "") or ""
+        top_away = g.get("top_away", "") or ""
+        bust = g.get("bust", "") or ""
+        keyplay = g.get("keyplay", "") or ""
+        dnote = g.get("def", "") or ""
 
-    with open(file_path, 'rb') as f:
-        part = MIMEBase('application', 'vnd.openxmlformats-officedocument.wordprocessingml.document')
-        part.set_payload(f.read())
-    encoders.encode_base64(part)
-    part.add_header('Content-Disposition', 'attachment', filename=os.path.basename(file_path))
-    message.attach(part)
+        context[f"MATCHUP{i}_HOME"] = home
+        context[f"MATCHUP{i}_AWAY"] = away
+        context[f"MATCHUP{i}_HS"] = hs
+        context[f"MATCHUP{i}_AS"] = aS
+        context[f"MATCHUP{i}_BLURB"] = blurb
 
-    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    return {'raw': raw}
+        context[f"MATCHUP{i}_TOP_HOME"] = top_home
+        context[f"MATCHUP{i}_TOP_AWAY"] = top_away
+        context[f"MATCHUP{i}_BUST"] = bust
+        context[f"MATCHUP{i}_KEYPLAY"] = keyplay
+        context[f"MATCHUP{i}_DEF"] = dnote
 
-def send_email(gmail_service, sender: str, to: str, subject: str, body: str, attachment_path: str = None):
-    if attachment_path:
-        message = create_message_with_attachment(sender, to, subject, body, attachment_path)
-    else:
-        msg = MIMEText(body)
-        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-        message = {'raw': raw}
-    sent = gmail_service.users().messages().send(userId='me', body=message).execute()
-    return sent.get('id')
+        # Legacy/compatibility fields
+        try:
+            hs_f = float(hs) if hs != "" else float("nan")
+            as_f = float(aS) if aS != "" else float("nan")
+            if hs != "" and aS != "":
+                scoreline = f"{home} {hs} – {away} {aS}"
+            else:
+                scoreline = f"{home} vs {away}".strip()
+            headline = f"{home if hs_f >= as_f else away} def. {away if hs_f >= as_f else home}"
+        except Exception:
+            scoreline = f"{home} vs {away}".strip()
+            headline = scoreline
+
+        context[f"MATCHUP{i}_TEAMS"] = scoreline
+        context[f"MATCHUP{i}_HEADLINE"] = headline
+        context[f"MATCHUP{i}_BODY"] = blurb
+
+
+def add_template_synonyms(context: Dict[str, Any], slots: int) -> None:
+    """
+    Flatten award structures and add top-level aliases your Word template uses.
+    """
+    context["WEEK_NUMBER"] = context.get("week", "")
+    if "WEEKLY_INTRO" not in context:
+        context["WEEKLY_INTRO"] = context.get("intro", "")
+
+    awards = context.get("awards", {}) or {}
+    top_score = awards.get("top_score", {}) or {}
+    low_score = awards.get("low_score", {}) or {}
+    largest_gap = awards.get("largest_gap", {}) or {}
+
+    context["AWARD_TOP_TEAM"] = top_score.get("team", "")
+    context["AWARD_TOP_NOTE"] = str(top_score.get("points", "")) or ""
+    context["AWARD_CUPCAKE_TEAM"] = low_score.get("team", "")
+    context["AWARD_CUPCAKE_NOTE"] = str(low_score.get("points", "")) or ""
+    context["AWARD_KITTY_TEAM"] = largest_gap.get("desc", "")
+    context["AWARD_KITTY_NOTE"] = str(largest_gap.get("gap", "")) or ""
+
 
 # ---------- Rendering ----------
-def render_for_row(row: Dict[str, Any]) -> Dict[str, Any]:
-    client = row.get("CLIENT_NAME","Client")
-    league = row.get("LEAGUE_NAME","League")
-    week = CONFIG["WEEK_NUMBER"] or row.get("WEEK_NUMBER","")
-    week_label = f"Week-{week}" if week else "Week-X"
-    out_dir = os.path.join(CONFIG["OUTPUT_DIR"], league, f"{week_label}")
-    os.makedirs(out_dir, exist_ok=True)
+def safe_title(s: str) -> str:
+    s = re.sub(r"[^\w\s\-\(\)\._]", "_", s)
+    s = re.sub(r"\s+", "_", s).strip("_")
+    return s
 
-    context = {key: row.get(key, "") for key in PLACEHOLDER_KEYS}
 
-    logo_path = row.get("LOGO_PATH") or CONFIG["DEFAULT_LOGO_PATH"]
-    tpl = DocxTemplate(CONFIG["TEMPLATE_PATH"])
-    if logo_path and os.path.exists(logo_path):
-        context["LOGO"] = InlineImage(tpl, logo_path, width=Mm(CONFIG["LOGO_WIDTH_MM"]))
-    else:
-        context["LOGO"] = ""
+def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple[str, Optional[str], Dict[str, str]]:
+    """
+    Render one league's gazette. Returns (docx_path, pdf_path_or_None, logo_map).
+    """
+    league_id = cfg.get("league_id")
+    year = cfg.get("year")
+    espn_s2 = cfg.get("espn_s2", "")
+    swid = cfg.get("swid", "")
 
-    tpl.render(context)
+    games = fetch_week_from_espn(league_id, year, espn_s2, swid)
+    ctx = build_context(cfg, games)
 
-    safe_client = "".join(c for c in client if c.isalnum() or c in (" ","-","_")).strip().replace(" ","_")
-    out_name = f"{safe_client}_{week_label}.docx"
-    out_path = os.path.join(out_dir, out_name)
-    tpl.save(out_path)
+    # Override via CLI if provided
+    if args.week is not None:
+        ctx["week_num"] = args.week  # optional, for your template if used
+    if args.week_label:
+        ctx["week"] = args.week_label
+    if args.date:
+        ctx["date"] = args.date
 
-    return {
-        "client": client,
-        "league": league,
-        "week": week,
-        "output_path": out_path,
-        "email": row.get("CLIENT_EMAIL",""),
-        "drive_folder_id": row.get("DRIVE_FOLDER_ID",""),
-    }
+    # Per-matchup keys + images + synonyms
+    add_enumerated_matchups(ctx, max_slots=args.slots)
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--upload", action="store_true", help="Upload output docs to Google Drive")
-    parser.add_argument("--email", action="store_true", help="Send emails with links/attachments via Gmail API")
-    args = parser.parse_args()
+    doc = DocxTemplate(args.template)
 
-    load_settings()
-    rows = load_rows()
-    if not rows:
-        print("No input rows found. Check CSV/JSON.")
+    logo_map: Dict[str, str] = {}
+    add_logo_images(ctx, doc, max_slots=args.slots, width_mm=args.logo_mm, logo_map=logo_map)
+    add_template_synonyms(ctx, slots=args.slots)
+
+    # Missing placeholders check (useful when editing the template)
+    missing = doc.get_undeclared_template_variables(ctx)
+    if missing:
+        print(f"[warn] Template references unknown variables: {sorted(missing)}")
+
+    # Output paths
+    league_name = cfg.get("name", f"league_{league_id}") or f"league_{league_id}"
+    out_dir = Path(args.out_dir) / safe_title(league_name)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    week_label = ctx.get("week", f"Week_{ctx.get('week_num','')}")
+    date_label = ctx.get("date", "")
+    base = safe_title(f"Gazette_{week_label}_{date_label}") if date_label else safe_title(f"Gazette_{week_label}")
+
+    docx_path = out_dir / f"{base}.docx"
+    doc.render(ctx)
+    doc.save(str(docx_path))
+
+    pdf_path: Optional[str] = None
+    if args.pdf:
+        pdf_path = to_pdf(str(docx_path))
+
+    # Optional: print the used logo map so you can verify paths
+    if args.print_logo_map:
+        print(f"[logo-map] {league_name}:")
+        for team, path in sorted(logo_map.items()):
+            print(f"  - {team} -> {path}")
+
+    return str(docx_path), pdf_path, logo_map
+
+
+# ---------- CLI ----------
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--leagues", default="leagues.json", help="Path to leagues config JSON.")
+    ap.add_argument("--template", default="recap_template.docx", help="DOCX template to render.")
+    ap.add_argument("--out-dir", default="recaps", help="Output root directory.")
+    ap.add_argument("--pdf", action="store_true", help="Also export PDF (via LibreOffice/docx2pdf).")
+    ap.add_argument("--league", default=None, help="Only render the league with this name.")
+    ap.add_argument("--week", type=int, default=None, help="Force a specific completed week number.")
+    ap.add_argument("--week-label", default=None, help='Override week label text, e.g. "Week 1 (Sep 4–9, 2025)".')
+    ap.add_argument("--date", default=None, help="Override date label text.")
+    ap.add_argument("--slots", type=int, default=10, help="Max matchup slots to render.")
+    ap.add_argument("--logo-mm", type=int, default=25, help="Logo width in millimeters.")
+    ap.add_argument("--print-logo-map", action="store_true", help="Print which logo file each team used.")
+    return ap.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+
+    # Load leagues list
+    leagues_path = Path(args.leagues)
+    if not leagues_path.exists():
+        print(f"[error] Leagues file not found: {leagues_path}", file=sys.stderr)
         sys.exit(1)
 
-    # Prepare API services if requested
-    drive_service = gmail_service = None
-    if args.upload:
-        drive_creds = get_creds(DRIVE_SCOPES, token_file="token_drive.json")
-        drive_service = build('drive', 'v3', credentials=drive_creds)
-    if args.email:
-        gmail_creds = get_creds(GMAIL_SCOPES, token_file="token_gmail.json")
-        gmail_service = build('gmail', 'v1', credentials=gmail_creds)
+    try:
+        leagues: List[Dict[str, Any]] = json.loads(leagues_path.read_text())
+    except Exception as e:
+        print(f"[error] Failed to read {leagues_path}: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    created = []
-    for row in rows:
-        try:
-            result = render_for_row(row)
-            link = None
+    # Optional filter by league name
+    items = [l for l in leagues if not args.league or l.get("name") == args.league]
+    if not items:
+        print("[warn] No leagues matched the filter; nothing to do.")
+        return
 
-            # Upload
-            if args.upload and drive_service:
-                # Determine target folder: use row override or default
-                folder_id = result["drive_folder_id"] or CONFIG["DEFAULT_DRIVE_FOLDER_ID"]
-                # If still empty, auto-build a Drive structure: /{League}/Week-{N}
-                if not folder_id:
-                    league_folder = ensure_drive_folder(drive_service, result["league"])
-                    week_folder = ensure_drive_folder(drive_service, f"Week-{result['week'] or 'X'}", parent_id=league_folder)
-                    folder_id = week_folder
-                link = upload_to_drive(drive_service, result["output_path"], folder_id)
+    for cfg in items:
+        docx, pdf, _ = render_single_league(cfg, args)
+        print(f"[ok] Wrote DOCX: {docx}")
+        if pdf:
+            print(f"[ok] Wrote PDF:  {pdf}")
 
-            # Email
-            if args.email and gmail_service:
-                recipient = result["email"]
-                if not recipient:
-                    print(f"[WARN] No CLIENT_EMAIL for {result['client']}. Skipping email.")
-                else:
-                    subject = CONFIG["DEFAULT_SUBJECT"]
-                    msg = CONFIG["DEFAULT_MESSAGE"]
-                    # simple replace for a couple vars
-                    msg = msg.replace("{{CLIENT_NAME}}", result["client"]).replace("{{WEEK_NUMBER}}", str(result["week"] or ""))
-                    # include link
-                    if link:
-                        msg += f"\n\nLink: {link}"
-                    sender = CONFIG["DEFAULT_FROM_EMAIL"] or "me"
-                    send_email(gmail_service, sender, recipient, subject, msg, attachment_path=result["output_path"])
-            created.append(result["output_path"])
-            print(f"Created: {result['output_path']}")
-        except Exception as e:
-            print(f"ERROR for row {row.get('CLIENT_NAME','(unknown)')}: {e}")
-
-    print(f"Done. Generated {len(created)} files.")
 
 if __name__ == "__main__":
     main()
