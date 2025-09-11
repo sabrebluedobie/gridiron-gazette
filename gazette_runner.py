@@ -375,7 +375,10 @@ def add_branding(ctx: Dict[str, Any], doc: DocxTemplate, cfg: Dict[str, Any], lo
 from types import SimpleNamespace
 
 def adapt_games_for_build_context(games_list):
-    """Normalize game dicts/objects so build_context can use attribute access like g.home, g.away, g.hs, g.ascore."""
+    """
+    Normalize game dicts/objects so build_context can do attribute access:
+    g.home, g.away, g.hs, g.ascore, g.home_top, g.away_top, g.bust, g.keyplay, g.dnote, etc.
+    """
     def coerce_num(x):
         try:
             return float(x)
@@ -383,40 +386,53 @@ def adapt_games_for_build_context(games_list):
             return x
 
     out = []
-    for g in games_list or []:
+    for g in (games_list or []):
         if isinstance(g, dict):
+            # team names
             home = g.get("home") or g.get("home_team") or ""
             away = g.get("away") or g.get("away_team") or ""
 
-            # collect score candidates and coerce to float when possible
-            hs = g.get("hs", g.get("home_score", g.get("hscore", g.get("score_home", ""))))
-            a  = g.get("as", g.get("away_score", g.get("ascore", g.get("score_away", ""))))
-            hs = coerce_num(hs)
-            a  = coerce_num(a)
+            # scores (provide many aliases)
+            hs = coerce_num(g.get("hs", g.get("home_score", g.get("hscore", g.get("score_home", "")))))
+            a  = coerce_num(g.get("as", g.get("away_score", g.get("ascore", g.get("score_away", "")))))
+
+            # spotlights & notes (alias all the likely variants)
+            top_home = g.get("top_home", g.get("home_top", ""))
+            top_away = g.get("top_away", g.get("away_top", ""))
+            bust     = g.get("bust", g.get("bust_player", ""))
+            keyplay  = g.get("keyplay", g.get("key_play", ""))
+            dnote    = g.get("def", g.get("dnote", g.get("defense", g.get("defense_note", ""))))
+            blurb    = g.get("blurb", "")
 
             out.append(SimpleNamespace(
-                # names most build_contexts use
+                # canonical
                 home=home, away=away,
-                hs=hs,             # home score
-                ascore=a,          # away score (explicit alias expected by your build_context)
-                # convenient alternates some code paths may read
+                hs=hs, ascore=a,
+                # score aliases
                 hscore=hs, home_score=hs, score_home=hs,
                 away_score=a, score_away=a,
-                # spotlight / blurb fields (safe defaults)
-                top_home=g.get("top_home", ""), top_away=g.get("top_away", ""),
-                bust=g.get("bust", ""), keyplay=g.get("keyplay", ""),
-                dnote=g.get("def", "") or g.get("dnote", ""),
-                defense=g.get("def", "") or g.get("dnote", ""),
-                blurb=g.get("blurb", ""),
+                # spotlight aliases
+                home_top=top_home, away_top=top_away,
+                top_home=top_home, top_away=top_away,
+                bust=bust, bust_player=bust,
+                keyplay=keyplay, key_play=keyplay,
+                dnote=dnote, defense=dnote, defense_note=dnote,
+                # text
+                blurb=blurb,
             ))
         else:
-            # If it's already an object (e.g., from espn_api), ensure aliases exist
+            # object from espn_api – ensure a couple of critical aliases exist
             if not hasattr(g, "ascore") and hasattr(g, "away_score"):
                 setattr(g, "ascore", getattr(g, "away_score"))
             if not hasattr(g, "hs") and hasattr(g, "home_score"):
                 setattr(g, "hs", getattr(g, "home_score"))
+            if not hasattr(g, "home_top") and hasattr(g, "top_home"):
+                setattr(g, "home_top", getattr(g, "top_home"))
+            if not hasattr(g, "away_top") and hasattr(g, "top_away"):
+                setattr(g, "away_top", getattr(g, "top_away"))
             out.append(g)
     return out
+
 
 
 
