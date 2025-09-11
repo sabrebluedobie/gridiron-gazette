@@ -61,42 +61,87 @@ Context:
 Tone: energetic local-paper style. Avoid clichés. One tight paragraph.
 """
 
+def default_blurb(g: dict) -> str:
+    home = (g.get("home") or "").strip()
+    away = (g.get("away") or "").strip()
+    hs   = g.get("hs")
+    as_  = g.get("as")
+    top_home = (g.get("top_home") or "").strip()
+    top_away = (g.get("top_away") or "").strip()
+    keyplay  = (g.get("keyplay") or "").strip()
+
+    # Headline-ish first sentence
+    if hs not in ("", None) and as_ not in ("", None):
+        try:
+            hs_f = float(hs); as_f = float(as_)
+            winner = home if hs_f >= as_f else away
+            loser  = away if hs_f >= as_f else home
+            first = f"{winner} topped {loser} {int(hs_f) if hs_f.is_integer() else hs_f}-{int(as_f) if as_f.is_integer() else as_f}."
+        except Exception:
+            first = f"{home} faced {away}."
+    else:
+        first = f"{home} faced {away}."
+
+    # Add quick color
+    bits = []
+    if top_home or top_away:
+        stars = ", ".join(x for x in [top_home, top_away] if x)
+        bits.append(f"Standouts: {stars}.")
+    if keyplay:
+        bits.append(f"Key play: {keyplay}.")
+
+    return " ".join([first] + bits).strip()
+
+
 def maybe_expand_blurbs(ctx, words: int = 160, model: str = "gpt-4o-mini", temperature: float = 0.7):
     """Replace/augment each game's 'blurb' using an LLM. Requires OPENAI_API_KEY."""
     import os
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        print("[warn] --llm-blurbs set but OPENAI_API_KEY not found; skipping expansion.")
+        print("[warn] --llm-blurbs set but OPENAI_API_KEY not found; using default blurbs.")
+        # ensure we have *something*
+        for g in ctx.get("games", []) or []:
+            if not (g.get("blurb") or "").strip():
+                g["blurb"] = default_blurb(g)
         return
 
     try:
         from openai import OpenAI
     except Exception as e:
-        print(f"[warn] openai package not available ({e}); skipping expansion.")
+        print(f"[warn] openai package not available ({e}); using default blurbs.")
+        for g in ctx.get("games", []) or []:
+            if not (g.get("blurb") or "").strip():
+                g["blurb"] = default_blurb(g)
         return
 
     client = OpenAI(api_key=api_key)
     games = ctx.get("games", []) or []
     for g in games:
-        prompt = BLURB_PROMPT.format(
-            words=words,
-            home=g.get("home",""), away=g.get("away",""),
-            hs=g.get("hs",""), away_score=g.get("as",""),
-            top_home=g.get("top_home",""), top_away=g.get("top_away",""),
-            bust=g.get("bust",""), keyplay=g.get("keyplay",""), dnote=g.get("def","")
-        )
+        # baseline so we always have something
+        baseline = (g.get("blurb") or "").strip() or default_blurb(g)
 
         try:
+            prompt = BLURB_PROMPT.format(
+                words=words,
+                home=g.get("home",""), away=g.get("away",""),
+                hs=g.get("hs",""), away_score=g.get("as",""),
+                top_home=g.get("top_home",""), top_away=g.get("top_away",""),
+                bust=g.get("bust",""), keyplay=g.get("keyplay",""), dnote=g.get("def","")
+            )
             resp = client.responses.create(
                 model=model,
                 input=prompt,
                 temperature=temperature,
             )
-            text = resp.output_text.strip()
-            if text:
-                g["blurb"] = text
+            text = (resp.output_text or "").strip()
+            g["blurb"] = text if text else baseline
         except Exception as e:
-            print(f"[warn] LLM blurb failed for {g.get('home','?')} vs {g.get('away','?')}: {e}")
+            # keep the baseline; avoid noisy Unicode errors on some terminals
+            try:
+                print(f"[warn] LLM blurb failed for {g.get('home','?')} vs {g.get('away','?')}: {e}")
+            except UnicodeEncodeError:
+                print("[warn] LLM blurb failed (non-ASCII message).")
+            g["blurb"] = baseline
 
 
 # ---------------- PDF helpers ----------------
