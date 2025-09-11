@@ -376,61 +376,71 @@ from types import SimpleNamespace
 
 def adapt_games_for_build_context(games_list):
     """
-    Normalize game dicts/objects so build_context can do attribute access:
-    g.home, g.away, g.hs, g.ascore, g.home_top, g.away_top, g.bust, g.keyplay, g.dnote, etc.
+    Normalize dicts/objects so build_context can freely use attribute access:
+    g.home, g.away, g.hs, g.ascore, g.home_top, g.away_top,
+    g.biggest_bust, g.key_play, g.defense_note, g.blurb, etc.
+    Anything missing is created with a sensible default.
     """
-    def coerce_num(x):
-        try:
-            return float(x)
-        except Exception:
-            return x
+    def num(x):
+        try: return float(x)
+        except Exception: return x
+
+    EXPECTED = [
+        "home", "away", "hs", "ascore",
+        "home_top", "away_top",
+        "biggest_bust", "key_play", "defense_note",
+        "blurb",
+    ]
 
     out = []
     for g in (games_list or []):
         if isinstance(g, dict):
-            # team names
+            # names & scores (collect from many possible keys)
             home = g.get("home") or g.get("home_team") or ""
             away = g.get("away") or g.get("away_team") or ""
+            hs   = num(g.get("hs", g.get("home_score", g.get("hscore", g.get("score_home", "")))))
+            a    = num(g.get("as", g.get("away_score", g.get("ascore", g.get("score_away", "")))))
 
-            # scores (provide many aliases)
-            hs = coerce_num(g.get("hs", g.get("home_score", g.get("hscore", g.get("score_home", "")))))
-            a  = coerce_num(g.get("as", g.get("away_score", g.get("ascore", g.get("score_away", "")))))
+            # spotlights / notes with aliases
+            top_home     = g.get("home_top", g.get("top_home", ""))
+            top_away     = g.get("away_top", g.get("top_away", ""))
+            biggest_bust = g.get("biggest_bust", g.get("bust", g.get("bust_player", "")))
+            key_play     = g.get("key_play", g.get("keyplay", ""))
+            defense_note = g.get("defense_note", g.get("defense", g.get("dnote", g.get("def", ""))))
+            blurb        = g.get("blurb", "")
 
-            # spotlights & notes (alias all the likely variants)
-            top_home = g.get("top_home", g.get("home_top", ""))
-            top_away = g.get("top_away", g.get("away_top", ""))
-            bust     = g.get("bust", g.get("bust_player", ""))
-            keyplay  = g.get("keyplay", g.get("key_play", ""))
-            dnote    = g.get("def", g.get("dnote", g.get("defense", g.get("defense_note", ""))))
-            blurb    = g.get("blurb", "")
-
-            out.append(SimpleNamespace(
-                # canonical
+            ns = SimpleNamespace(
                 home=home, away=away,
                 hs=hs, ascore=a,
-                # score aliases
+                # score aliases (harmless extras)
                 hscore=hs, home_score=hs, score_home=hs,
                 away_score=a, score_away=a,
-                # spotlight aliases
+                # spotlights / notes (canonical + alternates)
                 home_top=top_home, away_top=top_away,
                 top_home=top_home, top_away=top_away,
-                bust=bust, bust_player=bust,
-                keyplay=keyplay, key_play=keyplay,
-                dnote=dnote, defense=dnote, defense_note=dnote,
-                # text
+                biggest_bust=biggest_bust, bust=biggest_bust, bust_player=biggest_bust,
+                key_play=key_play, keyplay=key_play,
+                defense_note=defense_note, defense=defense_note, dnote=defense_note,
                 blurb=blurb,
-            ))
+            )
         else:
-            # object from espn_api – ensure a couple of critical aliases exist
-            if not hasattr(g, "ascore") and hasattr(g, "away_score"):
-                setattr(g, "ascore", getattr(g, "away_score"))
-            if not hasattr(g, "hs") and hasattr(g, "home_score"):
-                setattr(g, "hs", getattr(g, "home_score"))
-            if not hasattr(g, "home_top") and hasattr(g, "top_home"):
-                setattr(g, "home_top", getattr(g, "top_home"))
-            if not hasattr(g, "away_top") and hasattr(g, "top_away"):
-                setattr(g, "away_top", getattr(g, "top_away"))
-            out.append(g)
+            # object from espn_api: add any missing aliases it doesn’t expose
+            ns = g
+            if not hasattr(ns, "ascore") and hasattr(ns, "away_score"): setattr(ns, "ascore", getattr(ns, "away_score"))
+            if not hasattr(ns, "hs")     and hasattr(ns, "home_score"): setattr(ns, "hs",     getattr(ns, "home_score"))
+            if not hasattr(ns, "home_top") and hasattr(ns, "top_home"): setattr(ns, "home_top", getattr(ns, "top_home"))
+            if not hasattr(ns, "away_top") and hasattr(ns, "top_away"): setattr(ns, "away_top", getattr(ns, "top_away"))
+            if not hasattr(ns, "biggest_bust") and hasattr(ns, "bust"): setattr(ns, "biggest_bust", getattr(ns, "bust"))
+            if not hasattr(ns, "key_play") and hasattr(ns, "keyplay"):   setattr(ns, "key_play", getattr(ns, "keyplay"))
+            if not hasattr(ns, "defense_note") and hasattr(ns, "defense"):
+                setattr(ns, "defense_note", getattr(ns, "defense"))
+
+        # FINAL SAFETY NET: guarantee every expected field exists
+        for name in EXPECTED:
+            if not hasattr(ns, name):
+                setattr(ns, name, "")
+
+        out.append(ns)
     return out
 
 
