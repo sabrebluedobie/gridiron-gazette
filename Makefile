@@ -98,3 +98,15 @@ pdf:
 
 clean:
 	rm -rf $(OUT)/* __pycache__ */__pycache__
+
+.PHONY: doctor espn-check branding-test run
+
+doctor:
+	@echo "Repo root: $$(git rev-parse --show-toplevel)"
+	@echo "Python: $$(.venv/bin/python3 -V 2>/dev/null || python3 -V)"
+	@echo "Venv: $${VIRTUAL_ENV:-'(inactive)'}"
+	@echo "Template exists? $$(test -f recap_template.docx && echo yes || echo NO)"
+	@echo "LibreOffice: $$(command -v soffice || echo 'not found')"
+	@echo "OpenAI key set? $$(test -n "$$OPENAI_API_KEY" && echo yes || echo NO)"
+	@echo "ESPN cookies present? $$(python3 - <<'PY'\nimport json;import sys\ntry:\n cfg=json.load(open('leagues.json'))[0]\n print('yes' if (cfg.get('espn_s2') and cfg.get('swid')) else 'NO')\nexcept Exception as e:\n print('error:',e)\nPY)"
+	@echo "Latest recaps:" && ls -lht recaps/*/*.{pdf,docx} 2>/dev/null | head -n 6 || true
