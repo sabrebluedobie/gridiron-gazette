@@ -7,7 +7,9 @@
 #   make branding-test PDF=1 PRINT_LOGO_MAP=1
 #
 # Tip: For LLM blurbs, first:
-#   source .venv/bin/activate && export ***REMOVED***
+source .venv/bin/activate &&
+-include .env.local
+export ***REMOVED***
 ENVUTF8 := PYTHONIOENCODING=utf-8 LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 
 VENV            ?= .venv
@@ -98,6 +100,17 @@ pdf:
 
 clean:
 	rm -rf $(OUT)/* __pycache__ */__pycache__
+
+open-latest:
+	@open "$$(ls -t recaps/*/*.{pdf,docx} | head -1)"
+
+serve:
+	@python3 -m http.server 8000 --bind 0.0.0.0
+
+share-latest:
+	@mkdir -p shared
+	@cp "$$(ls -t recaps/*/*.{pdf,docx} | head -1)" shared/
+	@echo "Shared -> $$PWD/shared"
 
 .PHONY: doctor espn-check branding-test run
 
