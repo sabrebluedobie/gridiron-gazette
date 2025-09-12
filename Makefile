@@ -36,7 +36,7 @@ MODEL           ?= gpt-4o-mini
 TEMP            ?= 0.7
 
 # ---- Derived CLI args (built conditionally) ----
-ARGS = --leagues $(LEAGUES) --template $(TEMPLATE) --out-dir $(OUT) --slots $(SLOTS) --logo-mm $(LOGO_MM) --pdf-engine $(PDF_ENGINE)
+ARGS = --leagues $(LEAGUES) --template $(TEMPLATE) --out-dir "$(PWD)/recaps" --slots $(SLOTS) --logo-mm $(LOGO_MM) --pdf-engine $(PDF_ENGINE)
 
 ifeq ($(PDF),1)
 ARGS += --pdf
