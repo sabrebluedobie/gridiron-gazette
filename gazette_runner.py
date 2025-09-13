@@ -562,7 +562,7 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
             "games": [],
         }
     else:
-        raw_games = fetch_week_safe(league_id, year, espn_s2, swid, week=args.week)
+        raw_games = fetch_week_safe(league_id, year, espn_s2, swid, args.week)
         games = adapt_games_for_build_context(raw_games)
         ctx = build_context(cfg, games)
 
