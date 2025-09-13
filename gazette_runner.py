@@ -679,6 +679,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--logo-mm", type=int, default=25, help="Logo width in millimeters.")
     ap.add_argument("--print-logo-map", action="store_true", help="Print which logo file each team used.")
     ap.add_argument("--branding-test", action="store_true", help="Render a one-page branding smoke test.")
+    ap.add_argument("--blurb-test", action="store_true", help="Quick test mode for LLM blurbs: uses sensible defaults and skips PDF unless --pdf is passed.")
 
     # LLM blurb options
     ap.add_argument("--llm-blurbs", action="store_true", help="Use LLM to expand blurbs & spotlight fields.")
@@ -693,9 +694,48 @@ def parse_args() -> argparse.Namespace:
 # Main
 # --------------------------------------------------------------------------------------
 
+def _apply_blurb_test_presets(args):
+    """Apply safe, quick defaults when --blurb-test is set. No effect otherwise."""
+    if not getattr(args, "blurb_test", False):
+        return args
+
+    # Friendly defaults only if not already provided
+    if getattr(args, "week", None) in (None, ""):
+        args.week = 1
+    if getattr(args, "slots", None) in (None, 0):
+        args.slots = 10
+
+    # Ensure blurbs are on in test mode
+    if not getattr(args, "llm_blurbs", False):
+        args.llm_blurbs = True
+
+    # Nudge defaults if user didn’t specify
+    if not getattr(args, "blurb_words", None):
+        args.blurb_words = 1000
+    if not getattr(args, "model", None):
+        args.model = "gpt-4o-mini"
+    if not getattr(args, "temperature", None):
+        args.temperature = 0.4
+    if hasattr(args, "blurb_style") and not getattr(args, "blurb_style", None):
+        args.blurb_style = "rtg"
+
+    # Keep PDF OFF unless user explicitly passed --pdf
+    # (Most fast-iterating on Mac hits converter issues; this avoids that surprise.)
+    if not getattr(args, "pdf", False):
+        args.pdf = False
+
+    # Optional: quick console note so it’s obvious in logs
+    print("[blurb-test] Using quick presets (week={}, slots={}, words={}, model={}, temp={}, style={}, pdf={})".format(
+        args.week, args.slots, args.blurb_words, args.model, args.temperature,
+        getattr(args, "blurb_style", None), args.pdf
+    ))
+    return args
+
 def main() -> None:
     args = parse_args()
+    args = _apply_blurb_test_presets(args)
 
+    # Remove unexpected indentation below
     leagues_path = Path(args.leagues)
     if not leagues_path.exists():
         print(f"[error] Leagues file not found: {leagues_path}", file=sys.stderr)
@@ -710,7 +750,7 @@ def main() -> None:
     items = [l for l in leagues if not args.league or l.get("name") == args.league]
     if not items:
         print("[warn] No leagues matched the filter; nothing to do.")
-        return
+        sys.exit(0)
 
     for cfg in items:
         if args.branding_test:
