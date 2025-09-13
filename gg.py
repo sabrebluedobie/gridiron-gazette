@@ -74,7 +74,7 @@ def render_docx(template_path: Path, out_docx: Path, ctx: Dict[str, Any]) -> Pat
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Render a single Gridiron Gazette DOCX from a template.")
-    p.add_argument("--template", required=True, help="Path to .dotx/.docx template.")
+    p.add_argument("--template", required=True, default="./recap_template.docx", help="Path to .dotx/.docx template.")
     p.add_argument("--out-docx", required=True, help="Output .docx path to write.")
     p.add_argument("--league-logo", help="Path to league logo image (png/jpg).")
     p.add_argument("--sponsor-logo", help="Path to sponsor/business logo image (png/jpg).")
