@@ -62,6 +62,9 @@ run:
 branding-test:
 	$(ENVUTF8) $(PY) gazette_runner.py --branding-test --slots 1 $(ARGS)
 
+blurb-test:
+	$(ENVUTF8) $(PY) gazette_runner.py --blurb-test --llm-blurbs --blurb-words $(BLURB_WORDS) --model $(MODEL) --temperature $(TEMP) --blurb-style $(BLURB_STYLE) $(ARGS)
+
 
 # ---- Phony targets ----
 .PHONY: help venv install upgrade run branding-test pdf clean
