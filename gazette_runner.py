@@ -78,7 +78,26 @@ def safe_title(s: str) -> str:
 # -------------------------------------------------------------------
 # Renderers (unchanged, except they already call maybe_expand_blurbs_json)
 # -------------------------------------------------------------------
-# ... [KEEP render_single_league, render_branding_test]
+def render_branding_test(cfg: dict, args: argparse.Namespace):
+    """
+    Dummy implementation for branding test.
+    Replace with actual logic as needed.
+    """
+    docx_path = "branding_test.docx"
+    pdf_path = None
+    # Simulate rendering logic here
+    return docx_path, pdf_path, {}
+
+def render_single_league(cfg: dict, args: argparse.Namespace):
+    """
+    Render a single league's gazette file.
+    Replace this stub with your actual implementation.
+    """
+    docx_path = f"{safe_title(cfg.get('name', 'league'))}_week{args.week or 'X'}.docx"
+    pdf_path = None
+    # Simulate rendering logic here
+    return docx_path, pdf_path, {}
+
 # -------------------------------------------------------------------
 
 # -------------------------------------------------------------------
