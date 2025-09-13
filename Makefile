@@ -7,7 +7,7 @@
 #   make branding-test PDF=1 PRINT_LOGO_MAP=1
 #
 # Tip: For LLM blurbs, first:
-source .venv/bin/activate
+source .venv/bin/activate &&
 -include .env.local
 # export ***REMOVED***
 ENVUTF8 := PYTHONIOENCODING=utf-8 LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
