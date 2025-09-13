@@ -1,13 +1,33 @@
-name: Gridiron Gazette (Tuesday)
+name: Build Gazette
 
 on:
-  schedule:
-    - cron: "0 13 * * 2"   # Tuesdays 13:00 UTC
   workflow_dispatch:
+    inputs:
+      week:
+        description: "Completed ESPN week number"
+        required: false
+        default: "1"
+      llm_blurbs:
+        description: "Generate LLM blurbs? true/false"
+        required: false
+        default: "false"
+      blurb_style:
+        description: "Blurb style (mascot/neutral)"
+        required: false
+        default: "mascot"
 
 jobs:
-  run:
+  build:
     runs-on: ubuntu-latest
+    environment: production  # <-- uses the Environment secrets above
+
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ESPN_S2:        ${{ secrets.ESPN_S2 }}
+      SWID:           ${{ secrets.SWID }}
+      PYTHONIOENCODING: utf-8
+      LANG:             en_US.UTF-8
+      LC_ALL:           en_US.UTF-8
 
     steps:
       - name: Checkout
@@ -16,25 +36,60 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
-      - name: Install deps
+      - name: Install LibreOffice for PDF
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreoffice
+
+      - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Write Google creds
+      - name: Inject ESPN cookies into leagues.json if missing
         run: |
-          echo '${{ secrets.GCP_CREDENTIALS }}' > creds.json
+          python - <<'PY'
+          import json, os, sys, pathlib
+          p = pathlib.Path("leagues.json")
+          data = json.loads(p.read_text())
+          changed = False
+          for l in data:
+            if not l.get("espn_s2") and os.environ.get("ESPN_S2"):
+              l["espn_s2"] = os.environ["ESPN_S2"]; changed = True
+            if not l.get("swid") and os.environ.get("SWID"):
+              l["swid"] = os.environ["SWID"]; changed = True
+          if changed:
+            p.write_text(json.dumps(data, indent=2))
+            print("Updated leagues.json with env cookies.")
+          else:
+            print("leagues.json already has cookies.")
+          PY
 
-      - name: Generate & upload Gazette
-        env:
-          ***REMOVED***
-          LEAGUE_ID: ${{ secrets.LEAGUE_ID }}
-          YEAR: ${{ vars.YEAR || '2025' }}
-          GOOGLE_APPLICATION_CREDENTIALS: creds.json
-          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
-          GDRIVE_DOC_ID: ${{ secrets.GDRIVE_DOC_ID }}
-          ***REMOVED***
-          ***REMOVED***
-        run: python weekly_recap.py
+      - name: Build Gazette (DOCX + PDF)
+        run: |
+          WEEK="${{ inputs.week }}"
+          LLM="${{ inputs.llm_blurbs }}"
+          STYLE="${{ inputs.blurb_style }}"
+          EXTRA=""
+          if [ "$LLM" = "true" ]; then
+            EXTRA="--llm-blurbs --blurb-style $STYLE --blurb-words 160 --model gpt-4o-mini --temperature 0.7"
+          fi
+          python gazette_runner.py \
+            --leagues leagues.json \
+            --template recap_template.docx \
+            --out-dir recaps \
+            --slots 10 --logo-mm 25 \
+            --pdf --pdf-engine soffice \
+            --week "$WEEK" $EXTRA
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gazette-${{ github.run_number }}
+          path: |
+            recaps/**/*.pdf
+            recaps/**/*.docx
+          if-no-files-found: warn
+          retention-days: 7
