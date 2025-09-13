@@ -683,9 +683,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-from pathlib import Path
-# ...
-print(f"[ok] Wrote DOCX: {Path(docx).resolve()}")
-if pdf:
-    print(f"[ok] Wrote PDF:  {Path(pdf).resolve()}")
