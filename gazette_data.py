@@ -1,215 +1,274 @@
 # gazette_data.py
-# Shared data layer: ESPN fetch + optional OpenAI blurbs + context building.
-# Now supports "mascot voice" blurbs using descriptions from team_mascots.py.
-
 from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any, Tuple
-import os
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from mascots_util import mascot_for
+# Only for type-checkers; avoids Pylance complaining when espn_api isn't importable in the editor
+if TYPE_CHECKING:
+    from espn_api.football import League  # type: ignore
 
-# ESPN API (pip install espn-api)
+
+# ---- Optional mascot helpers (do not fail if not present) ----
 try:
-    from espn_api.football import League
+    from mascots_util import mascot_for as _mascot_for  # returns description string for team name
 except Exception:
-    League = None  # handled below
-
-# OpenAI (pip install openai >= 1.0)
-try:
-    from openai import OpenAI
-    _OPENAI = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) if os.getenv("OPENAI_API_KEY") else None
-except Exception:
-    _OPENAI = None
+    def _mascot_for(_: str) -> str:
+        return ""
 
 
-@dataclass
-class Game:
-    home: str
-    away: str
-    hs: float
-    ascore: float
-    home_top: Optional[str] = None
-    away_top: Optional[str] = None
-    biggest_bust: Optional[str] = None
-    key_play: Optional[str] = None
-    defense_note: Optional[str] = None
-    blurb: Optional[str] = None
+# ---------------- ESPN helpers ----------------
 
-
-def _fnum(x) -> float:
+def _import_league():
+    """Import League at runtime to avoid editor/venv hiccups."""
     try:
-        return float(x or 0)
+        from espn_api.football import League  # type: ignore
+        return League
+    except Exception as e:
+        raise RuntimeError(
+            "espn-api not installed or import failed. Install with: pip install espn-api"
+        ) from e
+
+
+def connect_league(league_id: int, year: int, espn_s2: str = "", swid: str = "") -> "League":
+    """
+    Create a League, adding cookies only if provided (needed for private leagues).
+    String return annotation keeps Pylance happy if the lib isn't resolvable.
+    """
+    League = _import_league()
+    if espn_s2 and swid:
+        return League(league_id=league_id, year=year, espn_s2=espn_s2, swid=swid)
+    return League(league_id=league_id, year=year)
+
+
+def _latest_completed_week(lg: "League") -> int:
+    """
+    Heuristic: use (current_week - 1) if available; fall back to 1.
+    """
+    try:
+        cw = getattr(lg, "current_week", None)
+        if isinstance(cw, int) and cw and cw > 1:
+            return cw - 1
     except Exception:
-        return 0.0
+        pass
+    return 1
 
-def _top_scorer(lineup) -> Optional[Tuple[str, float, str]]:
-    """Return (name, points, pos) for the top starter."""
+
+def _name_of(team_obj: Any) -> str:
+    """
+    Robustly extract a printable team name from ESPN team objects.
+    """
+    if team_obj is None:
+        return ""
+    for attr in ("team_name", "teamName", "name"):
+        val = getattr(team_obj, attr, None)
+        if isinstance(val, str) and val.strip():
+            return val
+    # Sometimes repr is decent
+    s = str(team_obj)
+    return s if s != "None" else ""
+
+
+def _max_player(lineup: Any) -> Optional[Tuple[str, float]]:
+    """
+    From a lineup iterable, return (player_name, points) for the highest scorer.
+    """
+    best = None
     try:
-        starters = [p for p in (lineup or []) if getattr(p, "slot_position", "") not in ("BE", "IR")]
-        if not starters:
-            return None
-        top = max(starters, key=lambda p: _fnum(getattr(p, "points", 0)))
-        name = getattr(getattr(top, "playerName", None) or top, "name", None) or getattr(top, "name", "Player")
-        pts = _fnum(getattr(top, "points", 0))
-        pos = getattr(top, "slot_position", "") or getattr(top, "position", "")
-        return (str(name), pts, pos)
+        for p in (lineup or []):
+            name = getattr(p, "name", None) or getattr(p, "playerName", None) or ""
+            pts = getattr(p, "points", None)
+            if pts is None:
+                pts = getattr(p, "total_points", None)
+            try:
+                ptsf = float(pts) if pts is not None else float("-inf")
+            except Exception:
+                ptsf = float("-inf")
+            if best is None or ptsf > best[1]:
+                best = (str(name) if name else "—", ptsf)
     except Exception:
         return None
+    return best
 
-def _biggest_bust(home_lineup, away_lineup) -> Optional[str]:
-    worst = None
-    cand = []
+
+def _box_scores(lg: "League", week: int):
+    """
+    Prefer box_scores (richer); fall back to scoreboard if needed.
+    """
     try:
-        for p in (home_lineup or []) + (away_lineup or []):
-            if getattr(p, "slot_position", "") in ("BE", "IR"):
-                continue
-            actual = _fnum(getattr(p, "points", 0))
-            proj = _fnum(getattr(p, "projected_points", 0))
-            delta = actual - proj
-            name = getattr(getattr(p, "playerName", None) or p, "name", None) or getattr(p, "name", "Player")
-            team = getattr(p, "proTeam", "") or ""
-            pos = getattr(p, "position", "") or getattr(p, "slot_position", "")
-            cand.append((delta, f"{name} ({pos} {team}) {actual:.1f} vs {proj:.1f} proj"))
-        if not cand:
-            return None
-        worst = min(cand, key=lambda x: x[0])
-        return worst[1]
+        return lg.box_scores(week=week)
     except Exception:
-        return None
+        return getattr(lg, "scoreboard", lambda week=None: [])(week=week)
 
-# ---------- Blurb generation ----------
 
-def _neutral_blurb(home: str, away: str, hs: float, ascore: float) -> str:
-    """Fallback / neutral one-liner (used if no API key or style=neutral)."""
-    if hs == ascore:
-        return f"{home} and {away} finished level, {hs:.1f}-{ascore:.1f}."
-    winner, wpts, loser, lpts = (home, hs, away, ascore) if hs >= ascore else (away, ascore, home, hs)
-    return f"{winner} edged {loser}, {wpts:.1f}-{lpts:.1f}."
-
-def _mascot_prompt(home: str, away: str, hs: float, ascore: float,
-                   home_desc: Optional[str], away_desc: Optional[str], league_name: str) -> str:
+def fetch_week_from_espn(
+    league_id: int,
+    year: int,
+    espn_s2: str = "",
+    swid: str = "",
+    week: Optional[int] = None,
+) -> List[Dict[str, Any]]:
     """
-    Compose a prompt that uses mascot descriptions as the narrative persona.
-    Keep it punchy and family-friendly.
+    Return list of dicts for the requested (or last completed) week:
+    Each game dict includes:
+        home, away, hs, as, home_score, away_score
+        top_home, top_away, bust, keyplay, def  (optional strings)
     """
-    lines = [
-        f"League: {league_name}",
-        "Write a punchy recap (<= 28 words), family-friendly.",
-        "Tone: energetic, local sports column.",
-        "Narration: let the team mascots color the voice (not role-play; just flavor).",
-        f"Home team: {home} — mascot description: {home_desc or 'n/a'}",
-        f"Away team: {away} — mascot description: {away_desc or 'n/a'}",
-        f"Final score: {home} {hs:.1f} – {away} {ascore:.1f}",
-        "Avoid emojis. No hashtags. One sentence."
-    ]
-    return "\n".join(lines)
+    lg = connect_league(league_id, year, espn_s2, swid)
+    if week is None:
+        week = _latest_completed_week(lg)
 
-def _ai_blurb(home: str, away: str, hs: float, ascore: float,
-              league_name: str, home_desc: Optional[str], away_desc: Optional[str],
-              style: str = "mascot") -> str:
-    """
-    style = 'mascot' -> use mascot descriptions to influence voice
-          = 'neutral' -> straight recap
-    Falls back to neutral if no OpenAI client or on error.
-    """
-    # neutral style or no API key → fallback
-    if style != "mascot" or not _OPENAI:
-        return _neutral_blurb(home, away, hs, ascore)
+    games: List[Dict[str, Any]] = []
+    for bs in _box_scores(lg, week=week) or []:
+        # Try to read via attributes; fall back to dict access if necessary
+        home_team = getattr(bs, "home_team", None) or (bs.get("home_team") if isinstance(bs, dict) else None)
+        away_team = getattr(bs, "away_team", None) or (bs.get("away_team") if isinstance(bs, dict) else None)
 
-    try:
-        prompt = _mascot_prompt(home, away, hs, ascore, home_desc, away_desc, league_name)
-        resp = _OPENAI.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=72,
-        )
-        msg = (resp.choices[0].message.content or "").strip()
-        return msg or _neutral_blurb(home, away, hs, ascore)
-    except Exception:
-        return _neutral_blurb(home, away, hs, ascore)
+        home_name = _name_of(home_team)
+        away_name = _name_of(away_team)
 
-# ---------- ESPN fetch & context ----------
+        hs = getattr(bs, "home_score", None)
+        if hs is None and isinstance(bs, dict):
+            hs = bs.get("home_score")
+        as_ = getattr(bs, "away_score", None)
+        if as_ is None and isinstance(bs, dict):
+            as_ = bs.get("away_score")
 
-def fetch_week_from_espn(league_id, year, espn_s2, swid, force_week=None):
-    from espn_api.football import League
-    lg = League(league_id=league_id, year=year, ***REMOVED***
-    week = int(force_week) if force_week else getattr(lg, "current_week", None)
-    # Prefer last completed week if your lib exposes it; otherwise use week
-    games = []
-    for m in lg.scoreboard(week=week):
-        games.append({
-            "home": m.home_team.team_name,
-            "away": m.away_team.team_name,
-            "hs":   m.home_score,
-            "as":   m.away_score,
-            # fill the rest as you were (top_home, bust, etc.)
-        })
+        # Lineups for top scorers
+        home_line = getattr(bs, "home_lineup", None) or (bs.get("home_lineup") if isinstance(bs, dict) else None)
+        away_line = getattr(bs, "away_lineup", None) or (bs.get("away_lineup") if isinstance(bs, dict) else None)
+
+        th = _max_player(home_line)
+        ta = _max_player(away_line)
+
+        top_home = f"{th[0]} ({th[1]:.1f})" if th else ""
+        top_away = f"{ta[0]} ({ta[1]:.1f})" if ta else ""
+
+        g: Dict[str, Any] = {
+            "home": home_name,
+            "away": away_name,
+            "hs": hs,
+            "as": as_,                   # keep legacy key for existing templates
+            "home_score": hs,            # friendlier synonyms
+            "away_score": as_,
+            "top_home": top_home,
+            "top_away": top_away,
+            "bust": "",                  # optional; fill elsewhere if you compute it
+            "keyplay": "",
+            "def": "",
+        }
+        games.append(g)
+
     return games
 
 
-def _awards(games: List[Game]) -> Dict[str, Any]:
-    if not games:
-        return {}
-    by_team = []
+# ---------------- Context builder ----------------
+
+def _compute_awards(games: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Simple awards block: top score, low score, and largest gap.
+    """
+    top_team = {"team": "", "points": 0.0}
+    low_team = {"team": "", "points": 0.0}
+    largest_gap = {"desc": "", "gap": 0.0}
+
+    have_low = False
+
     for g in games:
-        by_team.append((g.home, g.hs))
-        by_team.append((g.away, g.ascore))
-    top = max(by_team, key=lambda x: x[1])
-    low = min(by_team, key=lambda x: x[1])
-    margins = [(abs(g.hs - g.ascore), f"{g.home} {g.hs:.1f} – {g.away} {g.ascore:.1f}") for g in games]
-    gap = max(margins, key=lambda x: x[0])
+        try:
+            hs = float(g.get("hs") if g.get("hs") is not None else "nan")
+            as_ = float(g.get("as") if g.get("as") is not None else "nan")
+        except Exception:
+            continue
+
+        # Track top/low teams among participants
+        pairs = [(g.get("home", ""), hs), (g.get("away", ""), as_)]
+        for team, pts in pairs:
+            if pts != pts:  # NaN check
+                continue
+            if pts > top_team["points"]:
+                top_team = {"team": team, "points": pts}
+            if not have_low or pts < low_team["points"]:
+                low_team = {"team": team, "points": pts}
+                have_low = True
+
+        # Largest margin
+        if hs == hs and as_ == as_:
+            gap = abs(hs - as_)
+            desc = f"{g.get('home','')} vs {g.get('away','')}"
+            if gap > largest_gap["gap"]:
+                largest_gap = {"desc": desc, "gap": gap}
+
     return {
-        "top_score": {"team": top[0], "points": f"{top[1]:.1f}"},
-        "low_score": {"team": low[0], "points": f"{low[1]:.1f}"},
-        "largest_gap": {"desc": gap[1], "gap": f"{gap[0]:.1f}"},
+        "top_score": top_team,
+        "low_score": low_team,
+        "largest_gap": largest_gap,
     }
 
-def build_context(league_cfg: Dict[str, Any], games: List[Game]) -> Dict[str, Any]:
-    league = league_cfg.get("name", "League")
-    week_label = league_cfg.get("week_label") or "This Week"
-    style = (league_cfg.get("blurb_style") or "mascot").lower()  # 'mascot' or 'neutral'
-    use_blurbs = league_cfg.get("blurbs", True)
 
-    games_ctx = []
+def build_context(cfg: Dict[str, Any], games: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Normalize a league+week dataset into the context the renderer expects.
+    Required keys used by the runner/template:
+      - name, week_num (int), week (label), date (optional)
+      - games: list of dicts with keys from fetch_week_from_espn()
+      - awards: {top_score, low_score, largest_gap}
+      - (optional) intro text
+    """
+    league_name = cfg.get("name") or f"league_{cfg.get('league_id','')}"
+    week_num = cfg.get("week_num") or cfg.get("week") or cfg.get("completed_week")  # flexible
+    try:
+        week_num = int(week_num) if week_num is not None else None
+    except Exception:
+        week_num = None
+
+    # If no explicit label, synthesize something simple. Runner can override via CLI.
+    week_label = cfg.get("week_label") or (f"{week_num}" if week_num is not None else "")
+
+    # Optional ESPN cookies retained in context (runner doesn’t need them, but harmless)
+    espn_s2 = cfg.get("espn_s2", "")
+    swid = cfg.get("swid", "")
+
+    # Optionally enrich games with mascot blurbs (short, neutral)
+    enriched_games: List[Dict[str, Any]] = []
     for g in games:
-        # mascot descriptions (free-form text from team_mascots.py)
-        home_desc = mascot_for(g.home)
-        away_desc = mascot_for(g.away)
+        g2 = dict(g)  # shallow copy
+        if not g2.get("blurb"):
+            h_desc = _mascot_for(g2.get("home", "")) or ""
+            a_desc = _mascot_for(g2.get("away", "")) or ""
+            if h_desc or a_desc:
+                g2["blurb"] = f"{g2.get('home','')} ({h_desc}) vs {g2.get('away','')} ({a_desc})."
+            else:
+                g2["blurb"] = ""
+        # Provide both names for scores to avoid `{as}` issues in format strings
+        if "away_score" not in g2:
+            g2["away_score"] = g2.get("as")
+        if "home_score" not in g2:
+            g2["home_score"] = g2.get("hs")
+        enriched_games.append(g2)
 
-        # compose blurb
-        if use_blurbs:
-            blurb = _ai_blurb(
-                home=g.home, away=g.away, hs=g.hs, ascore=g.ascore,
-                league_name=league,
-                home_desc=home_desc, away_desc=away_desc,
-                style=style,
-            )
+    awards = _compute_awards(enriched_games)
+
+    ctx: Dict[str, Any] = {
+        "name": league_name,
+        "week_num": week_num,             # numeric week if known
+        "week": week_label,               # printable label
+        "date": cfg.get("date", ""),      # optional
+        "intro": cfg.get("intro", ""),    # optional text (runner maps WEEKLY_INTRO)
+        "games": enriched_games,
+        "awards": awards,
+        # carry-through (harmless)
+        "espn_s2": espn_s2,
+        "swid": swid,
+    }
+
+    # Legacy/title convenience
+    if not ctx.get("title"):
+        if week_label:
+            ctx["title"] = f"{league_name} — Week {week_label}"
+        elif week_num is not None:
+            ctx["title"] = f"{league_name} — Week {week_num}"
         else:
-            blurb = _neutral_blurb(g.home, g.away, g.hs, g.ascore)
+            ctx["title"] = f"{league_name} — Weekly Gazette"
 
-        games_ctx.append({
-            "home": g.home,
-            "away": g.away,
-            "hs": int(g.hs) if g.hs.is_integer() else g.hs,
-            "as": int(g.ascore) if g.ascore.is_integer() else g.ascore,
-            # Keep these as the *descriptions*, so templates can show them directly if desired:
-            "home_mascot": home_desc,
-            "away_mascot": away_desc,
-            "home_top": g.home_top,
-            "away_top": g.away_top,
-            "biggest_bust": g.biggest_bust,
-            "key_play": g.key_play,
-            "defense_note": g.defense_note,
-            "blurb": blurb,
-        })
-
-    return {
-        "league": league,
-        "title": f"{league} — {week_label}",
-        "week": week_label,
-        "games": games_ctx,
-        "awards": _awards(games),
-        "sponsor": league_cfg.get("sponsor", {}),
-    }
+    return ctx
