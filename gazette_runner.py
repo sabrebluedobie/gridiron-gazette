@@ -435,7 +435,7 @@ def maybe_expand_blurbs_json(
         prompt = BLURB_JSON_PROMPT.format(
             week=week_label,
             home=home, hs=hs if hs != "" else "–",
-            away=away, as=aS if aS != "" else "–",
+            away=away, aS=aS if aS != "" else "–",
             home_players_json=json.dumps(home_rows, ensure_ascii=False),
             away_players_json=json.dumps(away_rows, ensure_ascii=False),
             words=int(words),
