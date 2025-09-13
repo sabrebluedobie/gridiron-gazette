@@ -12,6 +12,18 @@ TEMP        ?= 0.4
 BLURB_STYLE ?= rtg
 ARGS        ?=
 
+# Data fetch behavior (override at CLI if needed)
+FORCE_LIVE   ?= 1      # 1 => hit live APIs, not stale caches
+NO_CACHE     ?= 1      # 1 => skip local/remote caches
+CACHE_TTL_S  ?= 0      # 0 => immediate expiry
+STATS_DEPTH  ?= box    # box=boxscores+top-performers+key plays
+
+export FORCE_LIVE
+export NO_CACHE
+export CACHE_TTL_S
+export STATS_DEPTH
+
+
 # Template fields (export so Python picks them up)
 FOOTER_NOTE  ?= See everyone Thursday!
 SPONSOR_LINE ?= Brought to you this week by ______
