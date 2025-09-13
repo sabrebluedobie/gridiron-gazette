@@ -136,3 +136,52 @@ doctor:
 	@echo "OpenAI key set? $$(test -n "$$OPENAI_API_KEY" && echo yes || echo NO)"
 	@echo "ESPN cookies present? $$(python3 - <<'PY'\nimport json;import sys\ntry:\n cfg=json.load(open('leagues.json'))[0]\n print('yes' if (cfg.get('espn_s2') and cfg.get('swid')) else 'NO')\nexcept Exception as e:\n print('error:',e)\nPY)"
 	@echo "Latest recaps:" && ls -lht recaps/*/*.{pdf,docx} 2>/dev/null | head -n 6 || true
+
+# === Gridiron Gazette: non-invasive targets (safe to append) ===
+ifndef GAZETTE_TARGETS_INCLUDED
+GAZETTE_TARGETS_INCLUDED := 1
+
+SHELL := /bin/bash
+
+# ---- Defaults (override at CLI) ----
+WEEK        ?= 1
+SLOTS       ?= 10
+PDF         ?= 1            # 1/yes/true/on -> adds --pdf
+LLM_BLURBS  ?= 1
+BLURB_WORDS ?= 850
+MODEL       ?= gpt-4o-mini
+TEMP        ?= 0.4
+BLURB_STYLE ?= rtg
+ARGS        ?=
+
+# DOCX template fields (export so Python sees them)
+FOOTER_NOTE  ?= See everyone Thursday!
+SPONSOR_LINE ?= Brought to you this week by ______
+export FOOTER_NOTE
+export SPONSOR_LINE
+
+# Runner and UTF-8 safety
+PY       ?= python3
+ENVUTF8  ?= env PYTHONIOENCODING=UTF-8
+
+# Include --pdf only when PDF is truthy
+PDF_FLAG := \$(if \$(filter 1 yes true on,\$(PDF)),--pdf,)
+
+.PHONY: blurb-test run
+
+# Canonical blurb test; add extra args with:  ARGS='--week 1 --slots 10 --pdf'
+blurb-test:
+	\$(ENVUTF8) \$(PY) gazette_runner.py \
+	  --blurb-test --llm-blurbs \
+	  --blurb-words \$(BLURB_WORDS) \
+	  --model \$(MODEL) --temperature \$(TEMP) \
+	  --blurb-style \$(BLURB_STYLE) \$(ARGS)
+
+# Weekly run; override WEEK/SLOTS/PDF/etc at CLI as needed
+run:
+	\$(ENVUTF8) \$(PY) gazette_runner.py \
+	  --week \$(WEEK) --slots \$(SLOTS) \$(PDF_FLAG) \
+	  --llm-blurbs --blurb-words \$(BLURB_WORDS) \
+	  --model \$(MODEL) --temperature \$(TEMP) \$(ARGS)
+
+endif
