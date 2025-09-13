@@ -1,0 +1,10 @@
+regex:sk-[A-Za-z0-9_-]{20,}
+REDACTED
+regex:(?i)OPENAI_API_KEY[=:].*
+OPENAI_API_KEY=REDACTED
+regex:(?i)ESPN_S2[=:].*
+ESPN_S2=REDACTED
+regex:(?i)espn_s2[=:].*
+espn_s2=REDACTED
+regex:(?i)SWID[=:].*
+SWID=REDACTED
