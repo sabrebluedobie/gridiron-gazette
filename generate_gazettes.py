@@ -18,7 +18,7 @@ from __future__ import annotations
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm  # or Inches
 
-TEMPLATE = "recap_template.dotx"  # update to your actual template path
+TEMPLATE = "recap_template.docx"  # update to your actual template path
 LEAGUE_LOGO_PATH = "logos/league.png"       # update path
 SPONSOR_LOGO_PATH = "logos/sponsor.png"     # update path
 
