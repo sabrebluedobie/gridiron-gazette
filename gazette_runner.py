@@ -247,7 +247,7 @@ def adapt_games_for_build_context(games_list: List[Any]) -> List[Any]:
 def fetch_week_safe(league_id, year, espn_s2, swid, force_week: Optional[int]):
     """Call fetch_week_from_espn with or without force_week depending on signature."""
     try:
-        return fetch_week_from_espn(league_id, year, espn_s2, swid, week=args.week)
+        return fetch_week_from_espn(league_id, year, espn_s2, swid, week=force_week)
     except TypeError:
         return fetch_week_from_espn(league_id, year, espn_s2, swid)
 
@@ -562,7 +562,7 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
             "games": [],
         }
     else:
-        raw_games = fetch_week_safe(league_id, year, espn_s2, swid, force_week=args.week)
+        raw_games = fetch_week_safe(league_id, year, espn_s2, swid, week=args.week)
         games = adapt_games_for_build_context(raw_games)
         ctx = build_context(cfg, games)
 
