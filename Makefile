@@ -61,10 +61,20 @@ run:
 
 branding-test:
 	$(ENVUTF8) $(PY) gazette_runner.py --branding-test --slots 1 $(ARGS)
+.PHONY: blurb-test
+
+# Optional defaults (only if you haven't defined these above)
+BLURB_WORDS ?= 1000
+MODEL       ?= gpt-4o-mini
+TEMP        ?= 0.4
+BLURB_STYLE ?= rtg
+ARGS        ?=
+ENVUTF8     ?= env PYTHONIOENCODING=UTF-8
+PY          ?= python3
 
 blurb-test:
 	$(ENVUTF8) $(PY) gazette_runner.py --blurb-test --llm-blurbs --blurb-words $(BLURB_WORDS) --model $(MODEL) --temperature $(TEMP) --blurb-style $(BLURB_STYLE) $(ARGS)
-
+	# This target runs the blurb test with your chosen settings.
 
 # ---- Phony targets ----
 .PHONY: help venv install upgrade run branding-test pdf clean
