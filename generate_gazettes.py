@@ -317,6 +317,11 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
 # ---------- CLI ----------
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--llm-blurbs", action="store_true", help="Generate blurbs with the LLM")
+    ap.add_argument("--blurb-words", type=int, default=500, help="Target word count per blurb")
+    ap.add_argument("--temperature", type=float, default=0.7, help="LLM creativity setting")
+    ap.add_argument("--blurb-style", type=str, default="neutral", help="Blurb style (e.g. mascot)")
+
     ap.add_argument("--leagues", default="leagues.json", help="Path to leagues config JSON.")
     ap.add_argument("--template", default="recap_template.docx", help="DOCX template to render.")
     ap.add_argument("--out-dir", default="recaps", help="Output root directory.")
