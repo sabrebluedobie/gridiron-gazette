@@ -17,3 +17,5 @@ recaps/
 *.pdf
 
 leagues.local.json
+.env.local
+*.docx
