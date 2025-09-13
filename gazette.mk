@@ -23,7 +23,15 @@ export NO_CACHE
 export CACHE_TTL_S
 export STATS_DEPTH
 
+DOCX_OUT := /Users/melaniebrown/Documents/Client\ FIles/gridiron-gazette/Gridiron-Gazette/Browns_SEA_KC_week1.docx
 
+docx-only:
+	. .venv/bin/activate && \
+	python3 gazette_runner.py --out-docx "$(DOCX_OUT)" --docx-only
+	  --week $(WEEK) --slots $(SLOTS) \
+	  --llm-blurbs --blurb-words $(BLURB_WORDS) \
+	  --model $(MODEL) --temperature $(TEMP) \
+	  --blurb-style $(BLURB_STYLE) $(ARGS)			
 # Template fields (export so Python picks them up)
 FOOTER_NOTE  ?= See everyone Thursday!
 SPONSOR_LINE ?= Brought to you this week by ______
