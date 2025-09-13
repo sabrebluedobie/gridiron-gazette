@@ -5,8 +5,25 @@ Generate styled Weekly Gazette DOCX/PDF files for one or many leagues.
 
 from __future__ import annotations
 
-import argparse, json, os, re, sys, subprocess
+import json, os, re, sys, subprocess
+import argparse
+
+p = argparse.ArgumentParser()
+p.add_argument("--docx-only", action="store_true", help="Write DOCX and skip PDF export")
+p.add_argument("--out-docx", required=True, help="Full path to output .docx")
+args = p.parse_args()
+
+# ... build the document ...
+# Removed erroneous write_docx and export_pdf calls.
+# Document generation and export are handled in main() via render_single_league or render_branding_test.
+
 from pathlib import Path
+
+out_path = Path("/Users/melaniebrown/Documents/Client FIles/gridiron-gazette/Gridiron-Gazette/Browns_SEA_KC_week1.docx")
+out_path.parent.mkdir(parents=True, exist_ok=True)
+
+# doc.save(str(out_path))  # whichever library you're using
+
 from typing import Any, Dict, List, Optional, Tuple
 
 # -------------------------------------------------------------------
