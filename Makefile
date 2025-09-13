@@ -184,4 +184,42 @@ run:
 	  --llm-blurbs --blurb-words \$(BLURB_WORDS) \
 	  --model \$(MODEL) --temperature \$(TEMP) \$(ARGS)
 
+# === Gridiron Gazette targets (non-invasive) ===
+ifndef GZ_GAZETTE_INCLUDED
+GZ_GAZETTE_INCLUDED := 1
+SHELL := /bin/bash
+
+WEEK        ?= 1
+SLOTS       ?= 10
+PDF         ?= 0
+BLURB_WORDS ?= 1000
+MODEL       ?= gpt-4o-mini
+TEMP        ?= 0.4
+BLURB_STYLE ?= rtg
+ARGS        ?=
+
+FOOTER_NOTE  ?= See everyone Thursday!
+SPONSOR_LINE ?= Brought to you this week by ______
+export FOOTER_NOTE
+export SPONSOR_LINE
+
+PY      ?= python3
+ENVUTF8 ?= env PYTHONIOENCODING=UTF-8
+PDF_FLAG := $(if $(filter 1 yes true on,$(PDF)),--pdf,)
+
+.PHONY: blurb-test run
+
+blurb-test:
+	$(ENVUTF8) $(PY) gazette_runner.py \
+	  --week $(WEEK) --slots $(SLOTS) \
+	  --llm-blurbs --blurb-words $(BLURB_WORDS) \
+	  --model $(MODEL) --temperature $(TEMP) \
+	  --blurb-style $(BLURB_STYLE) $(ARGS)
+
+run:
+	$(ENVUTF8) $(PY) gazette_runner.py \
+	  --week $(WEEK) --slots $(SLOTS) $(PDF_FLAG) \
+	  --llm-blurbs --blurb-words $(BLURB_WORDS) \
+	  --model $(MODEL) --temperature $(TEMP) $(ARGS)
 endif
+
