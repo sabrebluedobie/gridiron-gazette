@@ -281,6 +281,27 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
     games = fetch_week_from_espn(league_id, year, espn_s2, swid)
     ctx = build_context(cfg, games)
 
+    def _is_final(game: dict) -> bool:
+        st = (game.get("status") or {}).get("type") or {}
+        if st.get("completed") is True:
+            return True
+        state = (st.get("state") or "").lower()
+        name = (st.get("name") or "").lower()
+        return state in ("post", "final") or name.startswith("final")
+
+    def _week_number(game: dict) -> int | None:
+        wk = game.get("week") or {}
+        if isinstance(wk, dict):
+            return wk.get("number")
+        if isinstance(wk, int):
+            return wk
+        return None
+
+    if args.week is not None:
+        games = [g for g in games if _week_number(g) == args.week and _is_final(g)]
+    else:
+        games = [g for g in games if _is_final(g)]
+
     # Override via CLI if provided
     if args.week is not None:
         ctx["week_num"] = args.week  # optional, for your template if used
