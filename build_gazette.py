@@ -146,7 +146,7 @@ def resolve_template(path_str: str) -> Path:
     die(f"Template not found: {p.resolve()}")
 
 
-def render_docx(template_path: Path, out_docx: Path, ctx: Dict[str, Any]):
+def render_docx(template_path: Path, out_docx: Path, ctx: Dict[str, Any], args):
     out_docx.parent.mkdir(parents=True, exist_ok=True)
     tpl = DocxTemplate(str(template_path))
 
@@ -283,7 +283,7 @@ def main():
             style = ctx["blurb_style"]
             m["blurb"] = f"{style.capitalize()} recap: {home} {hs} vs {away} {as_}. Highlights coming soon."
 
-    render_docx(template_path, out_docx, ctx)
+    render_docx(template_path, out_docx, ctx, args)
     print(f"[ok] Wrote DOCX: {out_docx.resolve()}")
 
 
