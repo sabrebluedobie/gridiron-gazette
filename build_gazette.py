@@ -23,6 +23,8 @@ Notes:
   change `{{ league-logo-tag }}` -> `{{ league_logo_tag }}` and
           `{{ sponsor-logo-tag }}` -> `{{ sponsor_logo_tag }}`.
 """
+from __future__ import annotations
+
 import os
 
 def get_openai_key():
@@ -33,8 +35,6 @@ def get_env_var(name: str) -> str:
     if not val:
         raise EnvironmentError(f"Missing required environment variable: {name}")
     return val
-
-from __future__ import annotations
 
 import argparse
 import datetime as dt
