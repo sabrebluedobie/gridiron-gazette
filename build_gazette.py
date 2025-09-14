@@ -155,9 +155,32 @@ def render_docx(template_path: Path, out_docx: Path, ctx: Dict[str, Any]):
     for key in ("league_logo", "sponsor_logo"):
         if key in ctx and isinstance(ctx[key], str) and Path(ctx[key]).is_file():
             ctx[key] = InlineImage(tpl, ctx[key], width=Mm(30))  # tweak size to your header/footer
+    from types import SimpleNamespace
+    from docxtpl import InlineImage
+    from docx.shared import Mm
 
-    tpl.render(ctx)
-    tpl.save(str(out_docx))
+    # --- SAFE FALLBACKS (add before tpl.render(ctx)) ---
+    # Provide a basic 'league' object with a name, in case template uses {{ league }} or {{ league.name }}
+    league_name = ctx.get("title") or ctx.get("LEAGUE_NAME") or "League"
+    ctx.setdefault("league", {"name": league_name})  # dict works with {{ league.name }}
+    # If your template uses {{ league_logo }} anywhere, give it too:
+    if "league_logo" not in ctx and args.league_logo:
+        ctx["league_logo"] = InlineImage(tpl, args.league_logo, width=Mm(30))
+
+    # Map your header/footer placeholders exactly as they appear in the .docx
+    # (your template shows {{ league-logo-tag }} and {{ sponsor-logo-tag }})
+    if args.league_logo:
+        ctx["league-logo-tag"] = InlineImage(tpl, args.league_logo, width=Mm(30))
+    if args.sponsor_logo:
+        ctx["sponsor-logo-tag"] = InlineImage(tpl, args.sponsor_logo, width=Mm(30))
+
+        # Optional: ensure week fields exist so {{ WEEK_NUMBER }} etc don’t error
+        ctx.setdefault("WEEK_NUMBER", ctx.get("week") or ctx.get("week_num") or "")
+        ctx.setdefault("WEEKLY_INTRO", ctx.get("intro", ""))
+
+
+        tpl.render(ctx)
+        tpl.save(str(out_docx))
 
 
 def main():
