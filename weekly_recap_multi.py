@@ -43,12 +43,40 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ---------------- ESPN helpers ---------------- #
 
-def connect_league(league_id: int, year: int, ***REMOVED***
-    """Connect to ESPN league (with cookies if private)."""
-    if espn_s2 and ***REMOVED***
-        return League(league_id=league_id, year=year, ***REMOVED***
-    return League(league_id=league_id, year=year)
+from typing import Optional
+from espn_api.football import League
 
+def connect_league(
+    league_id: int,
+    year: int,
+    espn_s2: Optional[str] = None,
+    swid: Optional[str] = None,
+    fetch_league: bool = True,
+    debug: bool = False,
+) -> League:
+    """
+    Create an ESPN League client.
+    - If both espn_s2 and swid are provided, uses them (private league access).
+    - Otherwise, connects without cookies (public league).
+    """
+    espn_s2 = (espn_s2 or "").strip()
+    swid = (swid or "").strip()
+
+    if espn_s2 and swid:
+        return League(
+            league_id=league_id,
+            year=year,
+            espn_s2=espn_s2,
+            swid=swid,
+            fetch_league=fetch_league,
+            debug=debug,
+        )
+    return League(
+        league_id=league_id,
+        year=year,
+        fetch_league=fetch_league,
+        debug=debug,
+    )
 
 def safe_team_name(team):
     try:
