@@ -4,29 +4,38 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-gazette:
     runs-on: ubuntu-latest
+    environment: production   # <- this is the environment that holds your secrets/vars
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: "3.12"
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Build Gazette
+      - name: Install deps
         run: |
+          python -m pip install --upgrade pip "setuptools<81" wheel
+          pip install -r requirements.txt || pip install docxtpl==0.16.7 python-docx==1.1.2 docxcompose==1.4.0 Jinja2==3.1.4 lxml>=5.3 pillow>=10 espn_api
+          
+
+      - name: Build gazette
+        env:
+          # these come from your environment-level config (Settings → Environments → <your env>)
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ESPN_S2:        ${{ secrets.ESPN_S2 }}
+          SWID:           ${{ secrets.SWID }}
+          # optional env vars (use repo/environment “variables” if you’ve set them)
+          LEAGUE_ID: ${{ vars.LEAGUE_ID }}
+          YEAR:      ${{ vars.YEAR || '2025' }}
+        run: |
+          mkdir -p recaps
           python build_gazette.py \
             --template recap_template.docx \
             --out-docx recaps/Week1_Gazette.docx \
-            --league-id 887998 \
-            --year 2025 \
-            --week 1 \
-            --slots 6 \
+            --league-id "${LEAGUE_ID}" \
+            --year "${YEAR}" \
             --llm-blurbs \
             --blurb-style mascot \
             --blurb-words 1000 \
