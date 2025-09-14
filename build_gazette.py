@@ -20,6 +20,8 @@ Usage (single league, explicit week):
 """
 
 import os, sys, json
+from docxtpl import DocxTemplate, InlineImage
+from docx.shared import Mm
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -50,13 +52,22 @@ def resolve_last_completed_week(league) -> int:
         pass
     return last
 
-
-from docxtpl import DocxTemplate, InlineImage
-from docx.shared import Mm
-
 # ESPN
 try:
     from espn_api.football import League
+
+    def last_completed_week(league):
+        # Many leagues expose finalScoringPeriod; otherwise fall back safely.
+        try:
+            return int(getattr(league, "finalScoringPeriod", None) or league.current_week - 1)
+        except Exception:
+            return max(1, league.current_week - 1)
+
+    # In your main():
+    # if args.week is None:
+    #     league = connect_league(league_id, year, espn_s2, swid)  # however you already do this
+    #     args.week = last_completed_week(league)
+
 except Exception:
     League = None  # lazy error if not installed
 
@@ -129,9 +140,9 @@ def build_context(
         "games": games,
     }
     if league_logo and league_logo.is_file():
-        ctx["league_logo"] = str(league_logo)
+        ctx["LEAGUE_LOGO"] = str(league_logo)
     if sponsor_logo and sponsor_logo.is_file():
-        ctx["sponsor_logo"] = str(sponsor_logo)
+        ctx["SPONSOR_LOGO"] = str(sponsor_logo)
     return ctx
 
 
@@ -146,15 +157,17 @@ def resolve_template(path_str: str) -> Path:
     die(f"Template not found: {p.resolve()}")
 
 
-def render_docx(template_path: Path, out_docx: Path, ctx: Dict[str, Any], args):
-    out_docx.parent.mkdir(parents=True, exist_ok=True)
-    tpl = DocxTemplate(str(template_path))
+def render_docx(template_path, out_docx, ctx, args):
+    tpl = DocxTemplate(template_path)
 
-    # If your template uses InlineImage for any image placeholders you can do:
-    # Convert string file paths to InlineImage with a default size (keeps aspect).
-    for key in ("league_logo", "sponsor_logo"):
-        if key in ctx and isinstance(ctx[key], str) and Path(ctx[key]).is_file():
-            ctx[key] = InlineImage(tpl, ctx[key], width=Mm(30))  # tweak size to your header/footer
+    # Normalize & inject logos (only if present in ctx)
+    for key in ("LEAGUE_LOGO", "SPONSOR_LOGO"):
+        if key in ctx and ctx[key]:
+            ctx[key] = InlineImage(tpl, ctx[key], width=Mm(30))  # tweak size if needed
+
+    tpl.render(ctx)
+    tpl.save(out_docx)
+
     from types import SimpleNamespace
     from docxtpl import InlineImage
     from docx.shared import Mm
@@ -170,9 +183,9 @@ def render_docx(template_path: Path, out_docx: Path, ctx: Dict[str, Any], args):
     # Map your header/footer placeholders exactly as they appear in the .docx
     # (your template shows {{ league-logo-tag }} and {{ sponsor-logo-tag }})
     if args.league_logo:
-        ctx["league-logo-tag"] = InlineImage(tpl, args.league_logo, width=Mm(30))
+        ctx["LEAGUE_LOGO"] = InlineImage(tpl, args.league_logo, width=Mm(30))
     if args.sponsor_logo:
-        ctx["sponsor-logo-tag"] = InlineImage(tpl, args.sponsor_logo, width=Mm(30))
+        ctx["SPONSOR_LOGO"] = InlineImage(tpl, args.sponsor_logo, width=Mm(30))
 
         # Optional: ensure week fields exist so {{ WEEK_NUMBER }} etc don’t error
         ctx.setdefault("WEEK_NUMBER", ctx.get("week") or ctx.get("week_num") or "")

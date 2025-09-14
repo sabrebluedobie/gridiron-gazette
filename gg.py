@@ -66,17 +66,17 @@ def build_context(tpl: DocxTemplate, args: argparse.Namespace) -> Dict[str, Any]
         league_path = Path(args.league_logo)
         if not league_path.exists():
             raise FileNotFoundError(f"League logo not found: {league_path.resolve()}")
-        ctx["league_logo_tag"] = InlineImage(tpl, str(league_path), width=Mm(args.logo_mm))
+        ctx["LEAGUE_LOGO"] = InlineImage(tpl, str(league_path), width=Mm(args.logo_mm))
 
     if args.sponsor_logo:
         sponsor_path = Path(args.sponsor_logo)
         if not sponsor_path.exists():
             raise FileNotFoundError(f"Sponsor logo not found: {sponsor_path.resolve()}")
-        ctx["sponsor_logo_tag"] = InlineImage(tpl, str(sponsor_path), width=Mm(args.logo_mm))
+        ctx["SPONSOR_LOGO"] = InlineImage(tpl, str(sponsor_path), width=Mm(args.logo_mm))
 
     # Optional text fields you may show in the body
-    if use_week is not None:
-        ctx["week"] = use_week
+    if args.week is not None:
+        ctx["week"] = args.week
     if args.slots is not None:
         ctx["slots"] = args.slots
 
