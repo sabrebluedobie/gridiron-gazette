@@ -27,8 +27,8 @@ jobs:
           ESPN_S2:        ${{ secrets.ESPN_S2 }}
           SWID:           ${{ secrets.SWID }}
           # optional env vars (use repo/environment “variables” if you’ve set them)
-          LEAGUE_ID: ${{ vars.LEAGUE_ID }}
-          YEAR:      ${{ vars.YEAR }}
+          LEAGUE_ID: ${{ env.LEAGUE_ID }}
+          YEAR:      ${{ env.YEAR }}
         run: |
           mkdir -p recaps
           python build_gazette.py \
