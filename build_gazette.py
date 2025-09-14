@@ -23,6 +23,34 @@ import os, sys, json
 from pathlib import Path
 from typing import Any, Dict, List
 
+def _get_first_attr(obj, names, default=None):
+    for n in names:
+        if hasattr(obj, n):
+            v = getattr(obj, n)
+            if v is not None:
+                return v
+    return default
+
+def resolve_last_completed_week(league) -> int:
+    cur = _get_first_attr(
+        league,
+        ["current_week", "currentWeek", "currentMatchupPeriod", "scoringPeriodId"],
+        1,
+    )
+    try:
+        cur = int(cur)
+    except Exception:
+        cur = 1
+    last = max(1, cur - 1)
+    try:
+        reg = int(getattr(league.settings, "reg_season_count", last))
+        if last > reg:
+            last = reg
+    except Exception:
+        pass
+    return last
+
+
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 
@@ -141,11 +169,32 @@ def main():
 
     ap.add_argument("--league-id", type=int, required=True, help="ESPN league id")
     ap.add_argument("--year", type=int, required=True, help="League year, e.g., 2024")
-    ap.add_argument("--week", type=int, required=True, help="Completed week number to pull")
+    ap.add_argument(
+    "--week",
+    default="auto",
+    help="Completed week to pull (number) or 'auto' to use the last completed week",)
     ap.add_argument("--slots", type=int, default=6, help="How many matchups to show (default 6)")
 
     ap.add_argument("--league-logo", default=None, help="Path to league logo image")
     ap.add_argument("--sponsor-logo", default=None, help="Path to sponsor logo image")
+
+    ap.add_argument(
+    "--blurbs",
+    dest="blurbs",
+    action="store_true",
+    default=False,
+    help="Enable LLM blurbs (or template-generated fallbacks)",)
+
+    ap.add_argument(
+    "--no-blurbs",
+    dest="blurbs",
+    action="store_false",
+    help="Disable blurbs",)
+
+    ap.add_argument("--blurb-words", type=int, default=180)
+    ap.add_argument("--temperature", type=float, default=0.4)
+    ap.add_argument("--blurb-style", default="mascot", choices=["mascot", "neutral", "hype", "coach"])
+
 
     # If your league is private, set cookies via env or flags
     ap.add_argument("--espn-s2", default=os.getenv("ESPN_S2"), help="ESPN_S2 cookie (or set env ESPN_S2)")
@@ -164,21 +213,52 @@ def main():
     if sponsor_logo:
         require_file(sponsor_logo, "Sponsor logo")
 
+    week_arg = args.week
+    if isinstance(week_arg, str) and week_arg.lower() == "auto":
+        # Initialize league to resolve last completed week
+        if League is None:
+            die("espn_api not installed. Run: pip install espn_api")
+        if args.espn_s2 and args.swid:
+            league = League(league_id=args.league_id, year=args.year, espn_s2=args.espn_s2, swid=args.swid)
+        else:
+            league = League(league_id=args.league_id, year=args.year)
+        use_week = resolve_last_completed_week(league)
+    else:
+        use_week = int(week_arg)
+
+
     games = fetch_week(
         league_id=args.league_id,
         year=args.year,
-        week=args.week,
+        week=use_week,
         espn_s2=args.espn_s2,
         swid=args.swid,
     )
 
     ctx = build_context(
-        week=args.week,
+        week=use_week,
         slots=args.slots,
         league_logo=league_logo,
         sponsor_logo=sponsor_logo,
         games=games,
     )
+
+    ctx["blurbs_enabled"] = bool(args.blurbs)
+    ctx["blurb_style"] = args.blurb_style
+    ctx["blurb_words"] = int(args.blurb_words)
+    ctx["blurb_temperature"] = float(args.temperature)
+
+    # Ensure every slot has a 'blurb' field so the template never breaks.
+    # If you already have a list like ctx["matchups"] or ctx["slots"], adapt the name below.
+    matchups = ctx.get("matchups") or ctx.get("slots") or []
+    for m in matchups:
+        if "blurb" not in m or not m["blurb"]:
+            home = m.get("home_name") or m.get("home") or "Home"
+            away = m.get("away_name") or m.get("away") or "Away"
+            hs = m.get("home_score", "")
+            as_ = m.get("away_score", "")
+            style = ctx["blurb_style"]
+            m["blurb"] = f"{style.capitalize()} recap: {home} {hs} vs {away} {as_}. Highlights coming soon."
 
     render_docx(template_path, out_docx, ctx)
     print(f"[ok] Wrote DOCX: {out_docx.resolve()}")
