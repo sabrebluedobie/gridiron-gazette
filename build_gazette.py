@@ -23,6 +23,16 @@ Notes:
   change `{{ league-logo-tag }}` -> `{{ league_logo_tag }}` and
           `{{ sponsor-logo-tag }}` -> `{{ sponsor_logo_tag }}`.
 """
+import os
+
+def get_openai_key():
+    return os.getenv("OPENAI_API_KEY")
+
+def get_env_var(name: str) -> str:
+    val = os.getenv(name)
+    if not val:
+        raise EnvironmentError(f"Missing required environment variable: {name}")
+    return val
 
 from __future__ import annotations
 
@@ -30,6 +40,7 @@ import argparse
 import datetime as dt
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
 
 # Word templating + inline images
 from docxtpl import DocxTemplate, InlineImage
@@ -39,6 +50,8 @@ from docx.shared import Mm
 from PIL import Image  # noqa: F401 (ensures Pillow present)
 
 # ESPN
+
+import espn_api # noqa: F401 (ensures espn_api present)
 try:
     from espn_api.football import League
 except Exception as e:

@@ -13,8 +13,8 @@
       "line": "Gridiron Gazette — your weekly fantasy fix",
       "logo": "logos/generated_logos/gazette_logo.PNG"
     },
-    "blurbs": true,
-    "blurb_style": "mascot"
-  }
+    "llm-blurbs": true,
+    "blurb_style": "mascot",
+    "blurb-words": 1000 }
   
 ]
