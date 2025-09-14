@@ -10,7 +10,7 @@ on:
       llm_blurbs:
         description: "Generate LLM blurbs? true/false"
         required: false
-        default: "false"
+        default: "true"
       blurb_style:
         description: "Blurb style (mascot/neutral)"
         required: false
@@ -74,7 +74,7 @@ jobs:
           STYLE="${{ inputs.blurb_style }}"
           EXTRA=""
           if [ "$LLM" = "true" ]; then
-            EXTRA="--llm-blurbs --blurb-style $STYLE --blurb-words 160 --model gpt-4o-mini --temperature 0.7"
+            EXTRA="--llm-blurbs --blurb-style $STYLE --blurb-words 1000 --model gpt-4o-mini --temperature 0.7"
           fi
 
           python gazette_runner.py \
