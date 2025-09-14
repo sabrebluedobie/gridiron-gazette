@@ -3,94 +3,94 @@ name: Build Gazette
 on:
   workflow_dispatch:
     inputs:
+      out_name:
+        description: Output DOCX filename
+        required: true
+        default: Gazette_Week_auto.docx
+      league_id:
+        description: ESPN league id
+        required: true
+        default: "887998"
+      year:
+        description: Season year
+        required: true
+        default: "2025"
       week:
-        description: "Completed ESPN week number"
-        required: false
-        default: "1"
-      llm_blurbs:
-        description: "Generate LLM blurbs? true/false"
-        required: false
+        description: Week number or 'auto' for last completed week
+        required: true
+        default: "auto"
+      slots:
+        description: Number of matchup slots
+        required: true
+        default: "6"
+      blurbs:
+        description: Enable blurbs (true/false)
+        required: true
         default: "true"
       blurb_style:
-        description: "Blurb style (mascot/neutral)"
-        required: false
+        description: mascot | neutral | hype | coach
+        required: true
         default: "mascot"
+      blurb_words:
+        description: Blurb target words
+        required: true
+        default: "180"
+      temperature:
+        description: Blurb temperature
+        required: true
+        default: "0.4"
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    environment: production   # uses your Environment secrets
-
-    env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      ESPN_S2:        ${{ secrets.ESPN_S2 }}   # (spelled ESPN_S2, not EPSN_S2)
-      SWID:           ${{ secrets.SWID }}
-      PYTHONIOENCODING: utf-8
-      LANG:             en_US.UTF-8
-      LC_ALL:           en_US.UTF-8
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install LibreOffice (for PDF)
+      - name: Install deps
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libreoffice
-
-      - name: Install Python deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Inject ESPN cookies into leagues.json if missing
-        run: |
-          python - <<'PY'
-          import json, os, pathlib
-          p = pathlib.Path("leagues.json")
-          data = json.loads(p.read_text())
-          changed = False
-          for l in data:
-            if not l.get("espn_s2") and os.environ.get("ESPN_S2"):
-              l["espn_s2"] = os.environ["ESPN_S2"]; changed = True
-            if not l.get("swid") and os.environ.get("SWID"):
-              l["swid"] = os.environ["SWID"]; changed = True
-          if changed:
-            p.write_text(json.dumps(data, indent=2))
-            print("Updated leagues.json with env cookies.")
-          else:
-            print("leagues.json already has cookies.")
-          PY
-
-      - name: Build Gazette (DOCX + PDF)
-        run: |
-          WEEK="${{ inputs.week }}"
-          LLM="${{ inputs.llm_blurbs }}"
-          STYLE="${{ inputs.blurb_style }}"
-          EXTRA=""
-          if [ "$LLM" = "true" ]; then
-            EXTRA="--llm-blurbs --blurb-style $STYLE --blurb-words 1000 --model gpt-4o-mini --temperature 0.7"
+          python -m pip install --upgrade pip "setuptools<81" wheel
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install docxtpl==0.16.7 python-docx==1.1.2 docxcompose==1.4.0 Jinja2==3.1.4 lxml>=5.3 pillow>=10 espn_api
           fi
 
-          python gazette_runner.py \
-            --leagues leagues.json \
-            --template recap_template.docx \
-            --out-dir recaps \
-            --slots 10 --logo-mm 25 \
-            --pdf --pdf-engine soffice \
-            --week "$WEEK" $EXTRA
+      - name: Prepare logos
+        run: |
+          if [ -f logos/generated_logos.zip ]; then unzip -o logos/generated_logos.zip -d logos; fi
+          LEAGUE=""
+          for C in logos/generated_logos/BrownSEA_KC.PNG logos/generated-logos/BrownSEA_KC.PNG logos/generated_logos/BrownSEA-KC.PNG logos/generated-logos/BrownSEA-KC.PNG; do
+            [ -f "$C" ] && LEAGUE="$C" && break
+          done
+          SPONSOR=""
+          for C in logos/generated_logos/gazette_logo.png logos/generated_logos/gazette_logo.PNG logos/generated-logos/gazette_logo.png logos/generated-logos/gazette_logo.PNG logos/gazette_logo.png logos/gazette_logo.PNG; do
+            [ -f "$C" ] && SPONSOR="$C" && break
+          done
+          echo "LEAGUE_LOGO=$LEAGUE" >> $GITHUB_ENV
+          echo "SPONSOR_LOGO=$SPONSOR" >> $GITHUB_ENV
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - name: Build Gazette DOCX
+        run: |
+          mkdir -p recaps
+          python build_gazette.py \
+            --template recap_template.docx \
+            --out-docx "recaps/${{ inputs.out_name }}" \
+            --league-id "${{ inputs.league_id }}" \
+            --year "${{ inputs.year }}" \
+            --week "${{ inputs.week }}" \
+            --slots "${{ inputs.slots }}" \
+            $(test "${{ inputs.blurbs }}" = "true" && echo "--blurbs" || echo "--no-blurbs") \
+            --blurb-style "${{ inputs.blurb_style }}" \
+            --blurb-words "${{ inputs.blurb_words }}" \
+            --temperature "${{ inputs.temperature }}" \
+            ${LEAGUE_LOGO:+--league-logo "$LEAGUE_LOGO"} \
+            ${SPONSOR_LOGO:+--sponsor-logo "$SPONSOR_LOGO"}
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: gazette-${{ github.run_number }}
-          path: |
-            recaps/**/*.pdf
-            recaps/**/*.docx
-          if-no-files-found: warn
-          retention-days: 7
+          name: ${{ inputs.out_name }}
+          path: recaps/${{ inputs.out_name }}

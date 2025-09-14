@@ -75,8 +75,8 @@ def build_context(tpl: DocxTemplate, args: argparse.Namespace) -> Dict[str, Any]
         ctx["sponsor_logo_tag"] = InlineImage(tpl, str(sponsor_path), width=Mm(args.logo_mm))
 
     # Optional text fields you may show in the body
-    if args.week is not None:
-        ctx["week"] = args.week
+    if use_week is not None:
+        ctx["week"] = use_week
     if args.slots is not None:
         ctx["slots"] = args.slots
 
