@@ -34,8 +34,8 @@ jobs:
           python build_gazette.py \
             --template recap_template.docx \
             --out-docx recaps/Week1_Gazette.docx \
-            --league-id "${vars.LEAGUE_ID}" \
-            --year "${vars.YEAR}" \
+            --league-id "${{ env.LEAGUE_ID }}" \
+            --year "${{ env.YEAR }}" \
             --llm-blurbs \
             --blurb-style mascot \
             --blurb-words 1000 \
