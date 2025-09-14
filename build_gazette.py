@@ -24,6 +24,7 @@ from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 from pathlib import Path
 from typing import Any, Dict, List
+from datetime import datetime, timezone
 
 def _get_first_attr(obj, names, default=None):
     for n in names:
@@ -54,19 +55,46 @@ def resolve_last_completed_week(league) -> int:
 
 # ESPN
 try:
+    # --- ESPN helpers (ensure last completed week logic) ---
     from espn_api.football import League
 
-    def last_completed_week(league):
-        # Many leagues expose finalScoringPeriod; otherwise fall back safely.
-        try:
-            return int(getattr(league, "finalScoringPeriod", None) or league.current_week - 1)
-        except Exception:
-            return max(1, league.current_week - 1)
+    def last_completed_week(league) -> int:
+        # ESPN APIs tend to expose current scoring period; "completed" is usually current - 1
+        wk = getattr(league, "current_week", None) or getattr(league, "scoringPeriodId", None)
+        if not wk:
+            return 1
+        wk = max(1, int(wk) - 1)
+        # If user passed --week, caller will override
+        return wk
 
-    # In your main():
-    # if args.week is None:
-    #     league = connect_league(league_id, year, espn_s2, swid)  # however you already do this
-    #     args.week = last_completed_week(league)
+
+    def fetch_games_for_week(league_id: int, year: int, espn_s2: str | None, swid: str | None, week: int | None):
+        league = League(league_id=league_id, year=year, espn_s2=espn_s2 or None, swid=swid or None)
+        if week is None:
+            week = last_completed_week(league)
+        # Build the normalized game list for that week
+        matchups = league.scoreboard(week)
+        games = []
+        for m in matchups:
+            def _name(team_obj):
+                return getattr(team_obj, "team_name", None) or getattr(team_obj, "name", None) or str(team_obj)
+            home = _name(m.home_team)
+            away = _name(m.away_team)
+            hs = getattr(m, "home_score", None)
+            as_ = getattr(m, "away_score", None)
+            games.append(
+                {
+                    "home": home,
+                    "away": away,
+                    "home_score": hs if hs is not None else 0,
+                    "away_score": as_ if as_ is not None else 0,
+                }
+            )
+        return week, games  # make sure you return the week you actually used
+        # In your main():
+        # if args.week is None:
+        #     league = connect_league(league_id, year, espn_s2, swid)  # however you already do this
+        #     args.week = last_completed_week(league)
 
 except Exception:
     League = None  # lazy error if not installed
@@ -157,16 +185,20 @@ def resolve_template(path_str: str) -> Path:
     die(f"Template not found: {p.resolve()}")
 
 
-def render_docx(template_path, out_docx, ctx, args):
-    tpl = DocxTemplate(template_path)
+def render_docx(template_path: Path, out_docx: Path, ctx: Dict[str, Any], args=None) -> None:
+    tpl = DocxTemplate(str(template_path))
 
-    # Normalize & inject logos (only if present in ctx)
+    # Wrap header/footer image paths into InlineImage objects
     for key in ("LEAGUE_LOGO", "SPONSOR_LOGO"):
         if key in ctx and ctx[key]:
-            ctx[key] = InlineImage(tpl, ctx[key], width=Mm(30))  # tweak size if needed
+            p = Path(ctx[key]).expanduser().resolve()
+            if not p.exists():
+                raise FileNotFoundError(f"{key} not found at {p}")
+            ctx[key] = InlineImage(tpl, str(p), width=Mm(30))  # tweak size as desired
 
     tpl.render(ctx)
-    tpl.save(out_docx)
+    tpl.save(str(out_docx))
+    print(f"[ok] Wrote DOCX: {out_docx.resolve()}")
 
     from types import SimpleNamespace
     from docxtpl import InlineImage
