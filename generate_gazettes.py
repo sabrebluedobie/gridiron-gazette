@@ -15,7 +15,23 @@ Usage:
 """
 
 from __future__ import annotations
+from docxtpl import DocxTemplate, InlineImage
+from docx.shared import Mm  # or Inches
 
+TEMPLATE = "recap_template.docx"  # update to your actual template path
+LEAGUE_LOGO_PATH = "logos/league.png"       # update path
+SPONSOR_LOGO_PATH = "logos/sponsor.png"     # update path
+
+tpl = DocxTemplate(TEMPLATE)
+
+context = {
+    # ... your other fields for teams/scores/etc ...
+    "league_logo_tag": InlineImage(tpl, LEAGUE_LOGO_PATH, width=Mm(28)),   # tweak size as needed
+    "sponsor_logo_tag": InlineImage(tpl, SPONSOR_LOGO_PATH, width=Mm(28)), # tweak size as needed
+}
+
+tpl.render(context)
+tpl.save("out.docx")
 import argparse
 import json
 import os
@@ -317,7 +333,7 @@ def render_single_league(cfg: Dict[str, Any], args: argparse.Namespace) -> Tuple
 # ---------- CLI ----------
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--llm-blurbs", action="store_true", help="Generate blurbs with the LLM")
+    ap.add_argument("--llm-blurbs", action=argparse.BooleanOptionalAction, default=False, help="Enable/disable LLM blurbs")
     ap.add_argument("--blurb-words", type=int, default=500, help="Target word count per blurb")
     ap.add_argument("--temperature", type=float, default=0.7, help="LLM creativity setting")
     ap.add_argument("--blurb-style", type=str, default="neutral", help="Blurb style (e.g. mascot)")

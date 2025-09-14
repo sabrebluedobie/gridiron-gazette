@@ -1,9 +1,6 @@
-
-espn-api
-openai
-docxtpl
-python-docx
-pillow
-docx2pdf
-pytest
-
+docxtpl==0.16.7
+python-docx==1.1.2
+docxcompose==1.4.0
+Jinja2==3.1.4
+lxml>=5.3
+pillow>=10
