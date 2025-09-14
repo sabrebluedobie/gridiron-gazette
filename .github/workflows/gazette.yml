@@ -28,14 +28,14 @@ jobs:
           SWID:           ${{ secrets.SWID }}
           # optional env vars (use repo/environment “variables” if you’ve set them)
           LEAGUE_ID: ${{ vars.LEAGUE_ID }}
-          YEAR:      ${{ vars.YEAR || '2025' }}
+          YEAR:      ${{ vars.YEAR }}
         run: |
           mkdir -p recaps
           python build_gazette.py \
             --template recap_template.docx \
             --out-docx recaps/Week1_Gazette.docx \
-            --league-id "${LEAGUE_ID}" \
-            --year "${YEAR}" \
+            --league-id "${vars.LEAGUE_ID}" \
+            --year "${vars.YEAR}" \
             --llm-blurbs \
             --blurb-style mascot \
             --blurb-words 1000 \
