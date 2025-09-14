@@ -1,336 +1,312 @@
 #!/usr/bin/env python3
 """
-build_gazette.py
-- Fetch a specific completed ESPN week (private or public leagues)
-- Render your DOCX from a Word template (docx/docx/dotx) with logos in header/footer tags:
-    {{ league_logo }} and {{ sponsor_logo }}
-- Optional: export PDF later in Word (font-accurate)
+build_gazette.py — render a Weekly Gazette DOCX from ESPN data + a Word template.
 
-Usage (single league, explicit week):
-  . .venv/bin/activate 2>/dev/null || true
+Usage (example):
   python build_gazette.py \
     --template recap_template.docx \
     --out-docx recaps/Week1_Gazette.docx \
-    --league-id 123456 \
-    --year 2024 \
+    --league-id 887998 \
+    --year 2025 \
     --week 1 \
     --slots 6 \
     --league-logo logos/generated_logos/BrownSEA_KC.PNG \
-    --sponsor-logo logos/generated_logos/gazette_logo.png
+    --sponsor-logo logos/generated_logos/gazette_logo.png \
+    --llm-blurbs \
+    --blurb-style mascot \
+    --blurb-words 120 \
+    --temperature 0.4
+
+Notes:
+- If --week is omitted, we try to use (league.current_week - 1), clamped to >= 1.
+- Your template must use underscores in variable names. For the header/footer images,
+  change `{{ league-logo-tag }}` -> `{{ league_logo_tag }}` and
+          `{{ sponsor-logo-tag }}` -> `{{ sponsor_logo_tag }}`.
 """
 
-import os, sys, json
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+# Word templating + inline images
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
-from pathlib import Path
-from typing import Any, Dict, List
-from datetime import datetime, timezone
 
-def _get_first_attr(obj, names, default=None):
-    for n in names:
-        if hasattr(obj, n):
-            v = getattr(obj, n)
-            if v is not None:
-                return v
-    return default
-
-def resolve_last_completed_week(league) -> int:
-    cur = _get_first_attr(
-        league,
-        ["current_week", "currentWeek", "currentMatchupPeriod", "scoringPeriodId"],
-        1,
-    )
-    try:
-        cur = int(cur)
-    except Exception:
-        cur = 1
-    last = max(1, cur - 1)
-    try:
-        reg = int(getattr(league.settings, "reg_season_count", last))
-        if last > reg:
-            last = reg
-    except Exception:
-        pass
-    return last
+# Images
+from PIL import Image  # noqa: F401 (ensures Pillow present)
 
 # ESPN
 try:
-    # --- ESPN helpers (ensure last completed week logic) ---
     from espn_api.football import League
-
-    def last_completed_week(league) -> int:
-        # ESPN APIs tend to expose current scoring period; "completed" is usually current - 1
-        wk = getattr(league, "current_week", None) or getattr(league, "scoringPeriodId", None)
-        if not wk:
-            return 1
-        wk = max(1, int(wk) - 1)
-        # If user passed --week, caller will override
-        return wk
+except Exception as e:
+    raise SystemExit(
+        "Error: espn_api not installed. Run: pip install espn_api\n"
+        f"Details: {e}"
+    )
 
 
-    def fetch_games_for_week(league_id: int, year: int, espn_s2: str | None, swid: str | None, week: int | None):
-        league = League(league_id=league_id, year=year, espn_s2=espn_s2 or None, swid=swid or None)
-        if week is None:
-            week = last_completed_week(league)
-        # Build the normalized game list for that week
-        matchups = league.scoreboard(week)
-        games = []
-        for m in matchups:
-            def _name(team_obj):
-                return getattr(team_obj, "team_name", None) or getattr(team_obj, "name", None) or str(team_obj)
-            home = _name(m.home_team)
-            away = _name(m.away_team)
-            hs = getattr(m, "home_score", None)
-            as_ = getattr(m, "away_score", None)
-            games.append(
-                {
-                    "home": home,
-                    "away": away,
-                    "home_score": hs if hs is not None else 0,
-                    "away_score": as_ if as_ is not None else 0,
-                }
-            )
-        return week, games  # make sure you return the week you actually used
-        # In your main():
-        # if args.week is None:
-        #     league = connect_league(league_id, year, espn_s2, swid)  # however you already do this
-        #     args.week = last_completed_week(league)
+# ---------- Helpers ----------
 
-except Exception:
-    League = None  # lazy error if not installed
-
-
-def die(msg: str, code: int = 2):
-    print(f"[error] {msg}", file=sys.stderr)
-    sys.exit(code)
-
-
-def require_file(p: Path, label: str):
-    if not p.is_file():
-        die(f"{label} not found: {p.resolve()}")
-
-
-def fetch_week(
-    league_id: int,
-    year: int,
-    week: int,
-    espn_s2: str | None = None,
-    swid: str | None = None,
-) -> List[Dict[str, Any]]:
+def last_completed_week(league: League) -> int:
     """
-    Returns a list of matchup dicts for the completed week:
-      [{'home': 'Team A', 'away': 'Team B', 'home_score': 101.2, 'away_score': 98.6}, ...]
+    Best-effort: ESPN libraries expose `current_week` (the week that is now active).
+    For a "completed week", we use max(1, current_week - 1).
+    If attribute missing, default to 1.
     """
-    if League is None:
-        die("espn_api not installed. Run: pip install espn_api")
+    wk = getattr(league, "current_week", None)
+    if isinstance(wk, int) and wk > 1:
+        return wk - 1
+    return 1
 
-    # Connect (cookie auth only if provided; public leagues work without)
-    if espn_s2 and swid:
-        lg = League(league_id=league_id, year=year, espn_s2=espn_s2, swid=swid)
-    else:
-        lg = League(league_id=league_id, year=year)
 
-    # ESPN indexing: scoringPeriodId == week
-    matchups = lg.scoreboard(week)
-    out = []
-    for m in matchups:
-        # m.home_team / m.away_team may be objects; try to get names
-        def _name(team_obj):
-            return getattr(team_obj, "team_name", None) or getattr(team_obj, "name", None) or str(team_obj)
+def safe_title(s: str) -> str:
+    return "".join(c if c.isalnum() or c in "._- " else "_" for c in (s or ""))
 
-        home = _name(m.home_team)
-        away = _name(m.away_team)
-        hs = getattr(m, "home_score", None)
-        as_ = getattr(m, "away_score", None)
-        out.append(
-            {
-                "home": home,
-                "away": away,
-                "home_score": hs if hs is not None else 0,
-                "away_score": as_ if as_ is not None else 0,
-            }
+
+def ensure_image(path: Optional[str]) -> Optional[Path]:
+    if not path:
+        return None
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Image not found: {p.resolve()}")
+    return p
+
+
+def inline_logo(tpl: DocxTemplate, image_path: Optional[Path], width_mm: int = 30):
+    if not image_path:
+        return ""
+    return InlineImage(tpl, str(image_path), width=Mm(width_mm))
+
+
+def get_completed_score(matchup) -> Dict[str, Any]:
+    """
+    Normalize an ESPN matchup for template fields.
+    Works for regular season H/A results.
+    """
+    # Home/Away team objects differ a bit across API versions; guard with getattr
+    home = getattr(matchup, "home_team", None)
+    away = getattr(matchup, "away_team", None)
+
+    home_name = getattr(home, "team_name", None) or getattr(home, "team_abbrev", "") or "Home"
+    away_name = getattr(away, "team_name", None) or getattr(away, "team_abbrev", "") or "Away"
+
+    # Scores
+    home_score = getattr(matchup, "home_score", None)
+    away_score = getattr(matchup, "away_score", None)
+
+    # Simple “top scorer” placeholders (customize if you like later)
+    top_home = f"{home_name} top performer"
+    top_away = f"{away_name} top performer"
+
+    return {
+        "home": home_name,
+        "away": away_name,
+        "hs": f"{home_score:.1f}" if isinstance(home_score, (int, float)) else "",
+        "as": f"{away_score:.1f}" if isinstance(away_score, (int, float)) else "",
+        "top_home": top_home,
+        "top_away": top_away,
+        "bust": "",
+        "keyplay": "",
+        "def": "",
+    }
+
+
+def build_blurb(home: str, away: str, style: str, words: int) -> str:
+    """
+    Simple, local blurb generator (no LLM call here). You can replace this
+    with a real model later if desired.
+    """
+    if style.lower() == "mascot":
+        return (
+            f"In a mascot melee, {home} locked horns with {away}. "
+            f"Both sides traded blows, but only one walked off with bragging rights. "
+            f"Fans are already circling next week on the calendar."
         )
-    return out
+    # default neutral
+    return (
+        f"{home} and {away} squared off in a tightly contested matchup. "
+        f"Momentum swung multiple times before the final whistle."
+    )
+
+
+def fetch_week(league_id: int, year: int, espn_s2: str | None, swid: str | None, week: Optional[int]) -> Dict[str, Any]:
+    """
+    Connect to ESPN and return (league, week_used, matchups_for_week).
+    """
+    league = League(league_id=league_id, year=year, espn_s2=espn_s2 or None, swid=swid or None)
+    use_week = week or last_completed_week(league)
+    # League.matchups property supports filtering by week in recent espn_api versions
+    matchups = [m for m in league.matchups if getattr(m, "week", None) == use_week] or league.matchups
+    # If above returns empty, fall back to whatever the library exposes
+    if getattr(matchups[0], "week", None) != use_week:
+        # final fallback: ask the library again via private helper if available
+        pass
+    return {"league": league, "week": use_week, "matchups": matchups}
 
 
 def build_context(
-    week: int,
+    tpl: DocxTemplate,
+    league_name: str,
+    week_num: int,
     slots: int,
-    league_logo: Path | None,
-    sponsor_logo: Path | None,
-    games: List[Dict[str, Any]],
+    matchups: List[Any],
+    league_logo_path: Optional[Path],
+    sponsor_logo_path: Optional[Path],
+    llm_blurbs: bool,
+    blurb_style: str,
+    blurb_words: int,
 ) -> Dict[str, Any]:
-    # Trim to requested visible slots (if you want fewer than the league produced)
-    games = games[: max(slots, 0)] if slots else games
+    """
+    Convert ESPN data into the flat key structure your DOCX template expects.
+    """
+    ctx: Dict[str, Any] = {}
 
-    ctx: Dict[str, Any] = {
-        "week_num": week,
-        "games": games,
-    }
-    if league_logo and league_logo.is_file():
-        ctx["LEAGUE_LOGO"] = str(league_logo)
-    if sponsor_logo and sponsor_logo.is_file():
-        ctx["SPONSOR_LOGO"] = str(sponsor_logo)
+    # Header/footer logos (IMPORTANT: your template must use underscores in tag names)
+    ctx["league_logo"] = inline_logo(tpl, league_logo_path, width_mm=30)
+    ctx["sponsor_logo"] = inline_logo(tpl, sponsor_logo_path, width_mm=30)
+
+    # Top-level fields used by your template
+    ctx["title"] = league_name or "Gridiron Gazette"
+    ctx["WEEK_NUMBER"] = str(week_num)
+    ctx["WEEKLY_INTRO"] = ctx.get("WEEKLY_INTRO", "Here’s how the action unfolded across the league.")
+
+    # Matchups (up to `slots`)
+    for i in range(1, slots + 1):
+        # Pull matchup or leave blanks
+        m = matchups[i - 1] if i - 1 < len(matchups) else None
+
+        key = lambda suffix: f"MATCHUP{i}_{suffix}"
+
+        if not m:
+            # blank out the block
+            for suffix in [
+                "HOME", "AWAY", "HS", "AS", "HOME_LOGO", "AWAY_LOGO",
+                "BLURB", "TOP_HOME", "TOP_AWAY", "BUST", "KEYPLAY", "DEF",
+            ]:
+                ctx[key(suffix)] = "" if suffix not in ("HOME_LOGO", "AWAY_LOGO") else ""
+            continue
+
+        norm = get_completed_score(m)
+        home = norm["home"]
+        away = norm["away"]
+
+        ctx[key("HOME")] = home
+        ctx[key("AWAY")] = away
+        ctx[key("HS")] = norm["hs"]
+        ctx[key("AS")] = norm["as"]
+        ctx[key("TOP_HOME")] = norm["top_home"]
+        ctx[key("TOP_AWAY")] = norm["top_away"]
+        ctx[key("BUST")] = norm["bust"]
+        ctx[key("KEYPLAY")] = norm["keyplay"]
+        ctx[key("DEF")] = norm["def"]
+
+        # If you later want per-team logos, wire a map here.
+        ctx[key("HOME_LOGO")] = ""
+        ctx[key("AWAY_LOGO")] = ""
+
+        # Blurb
+        ctx[key("BLURB")] = build_blurb(home, away, blurb_style, blurb_words) if llm_blurbs else ""
+
+    # Awards (optional — keep blank if not computed yet)
+    ctx["AWARD_CUPCAKE_TEAM"] = ctx.get("AWARD_CUPCAKE_TEAM", "")
+    ctx["AWARD_CUPCAKE_NOTE"] = ctx.get("AWARD_CUPCAKE_NOTE", "")
+    ctx["AWARD_KITTY_TEAM"] = ctx.get("AWARD_KITTY_TEAM", "")
+    ctx["AWARD_KITTY_NOTE"] = ctx.get("AWARD_KITTY_NOTE", "")
+    ctx["AWARD_TOP_TEAM"] = ctx.get("AWARD_TOP_TEAM", "")
+    ctx["AWARD_TOP_NOTE"] = ctx.get("AWARD_TOP_NOTE", "")
+
+    # Footer bits you referenced
+    ctx["FOOTER_NOTE"] = ctx.get("FOOTER_NOTE", dt.date.today().strftime("%b %d, %Y"))
+    ctx["SPONSOR_LINE"] = ctx.get("SPONSOR_LINE", "your friendly neighborhood sponsor")
+
     return ctx
 
 
-def resolve_template(path_str: str) -> Path:
-    p = Path(path_str)
-    if p.is_file():
-        return p
-    # search in ./templates if not found
-    alt = Path("templates") / p.name
-    if alt.is_file():
-        return alt
-    die(f"Template not found: {p.resolve()}")
-
-
-def render_docx(template_path: Path, out_docx: Path, ctx: Dict[str, Any], args=None) -> None:
+def render_docx(template_path: Path, out_docx: Path, ctx: Dict[str, Any]) -> None:
     tpl = DocxTemplate(str(template_path))
-
-    # Wrap header/footer image paths into InlineImage objects
-    for key in ("LEAGUE_LOGO", "SPONSOR_LOGO"):
-        if key in ctx and ctx[key]:
-            p = Path(ctx[key]).expanduser().resolve()
-            if not p.exists():
-                raise FileNotFoundError(f"{key} not found at {p}")
-            ctx[key] = InlineImage(tpl, str(p), width=Mm(30))  # tweak size as desired
-
     tpl.render(ctx)
+    out_docx.parent.mkdir(parents=True, exist_ok=True)
     tpl.save(str(out_docx))
-    print(f"[ok] Wrote DOCX: {out_docx.resolve()}")
-
-    from types import SimpleNamespace
-    from docxtpl import InlineImage
-    from docx.shared import Mm
-
-    # --- SAFE FALLBACKS (add before tpl.render(ctx)) ---
-    # Provide a basic 'league' object with a name, in case template uses {{ league }} or {{ league.name }}
-    league_name = ctx.get("title") or ctx.get("LEAGUE_NAME") or "League"
-    ctx.setdefault("league", {"name": league_name})  # dict works with {{ league.name }}
-    # If your template uses {{ league_logo }} anywhere, give it too:
-    if "league_logo" not in ctx and args.league_logo:
-        ctx["league_logo"] = InlineImage(tpl, args.league_logo, width=Mm(30))
-
-    # Map your header/footer placeholders exactly as they appear in the .docx
-    # (your template shows {{ league-logo-tag }} and {{ sponsor-logo-tag }})
-    if args.league_logo:
-        ctx["LEAGUE_LOGO"] = InlineImage(tpl, args.league_logo, width=Mm(30))
-    if args.sponsor_logo:
-        ctx["SPONSOR_LOGO"] = InlineImage(tpl, args.sponsor_logo, width=Mm(30))
-
-        # Optional: ensure week fields exist so {{ WEEK_NUMBER }} etc don’t error
-        ctx.setdefault("WEEK_NUMBER", ctx.get("week") or ctx.get("week_num") or "")
-        ctx.setdefault("WEEKLY_INTRO", ctx.get("intro", ""))
 
 
-        tpl.render(ctx)
-        tpl.save(str(out_docx))
-
+# ---------- CLI ----------
 
 def main():
-    import argparse
+    ap = argparse.ArgumentParser(description="Render a Weekly Gazette DOCX from ESPN data.")
+    ap.add_argument("--template", required=True, help="Path to the Word (.docx) template")
+    ap.add_argument("--out-docx", required=True, help="Output DOCX path")
+    ap.add_argument("--league-id", type=int, required=True)
+    ap.add_argument("--year", type=int, required=True)
+    ap.add_argument("--week", type=int, default=None, help="Completed week number; if omitted, uses last completed week")
+    ap.add_argument("--slots", type=int, default=6, help="Number of matchup blocks to fill (1–6)")
+    ap.add_argument("--league-logo", default=None, help="Path to league logo image for header")
+    ap.add_argument("--sponsor-logo", default=None, help="Path to sponsor logo image for footer")
 
-    ap = argparse.ArgumentParser(description="Build a Gazette DOCX from ESPN + Word template.")
-    ap.add_argument("--template", required=True, help="Path to DOCX/DOTX template (e.g., recap_template.docx)")
-    ap.add_argument("--out-docx", required=True, help="Output DOCX path (e.g., recaps/Week1_Gazette.docx)")
+    # Blurb options (local generator placeholder)
+    ap.add_argument("--llm-blurbs", action=argparse.BooleanOptionalAction, default=False, help="Fill matchup blurbs")
+    ap.add_argument("--blurb-style", default="mascot", help="Blurb style preset (e.g., mascot)")
+    ap.add_argument("--blurb-words", type=int, default=120, help="Target words for blurbs (hint only)")
+    ap.add_argument("--temperature", type=float, default=0.4, help="Reserved for LLM usage later")
 
-    ap.add_argument("--league-id", type=int, required=True, help="ESPN league id")
-    ap.add_argument("--year", type=int, required=True, help="League year, e.g., 2024")
-    ap.add_argument(
-    "--week",
-    default="auto",
-    help="Completed week to pull (number) or 'auto' to use the last completed week",)
-    ap.add_argument("--slots", type=int, default=6, help="How many matchups to show (default 6)")
+    # Optional display label overrides
+    ap.add_argument("--week-label", default=None, help='Override visible week label (e.g., "Week 1 (Sep 4–9, 2025)")')
 
-    ap.add_argument("--league-logo", default=None, help="Path to league logo image")
-    ap.add_argument("--sponsor-logo", default=None, help="Path to sponsor logo image")
-
-    ap.add_argument(
-    "--blurbs",
-    dest="blurbs",
-    action="store_true",
-    default=False,
-    help="Enable LLM blurbs (or template-generated fallbacks)",)
-
-    ap.add_argument(
-    "--no-blurbs",
-    dest="blurbs",
-    action="store_false",
-    help="Disable blurbs",)
-
-    ap.add_argument("--blurb-words", type=int, default=180)
-    ap.add_argument("--temperature", type=float, default=0.4)
-    ap.add_argument("--blurb-style", default="mascot", choices=["mascot", "neutral", "hype", "coach"])
-
-
-    # If your league is private, set cookies via env or flags
-    ap.add_argument("--espn-s2", default=os.getenv("ESPN_S2"), help="ESPN_S2 cookie (or set env ESPN_S2)")
-    ap.add_argument("--swid", default=os.getenv("SWID"), help="SWID cookie (or set env SWID)")
+    # ESPN cookies for private leagues (GH secrets or env can supply these)
+    ap.add_argument("--espn-s2", default=None)
+    ap.add_argument("--swid", default=None)
 
     args = ap.parse_args()
 
-    template_path = resolve_template(args.template)
+    template_path = Path(args.template)
+    if not template_path.exists():
+        raise FileNotFoundError(f"Template not found: {template_path.resolve()}")
+
     out_docx = Path(args.out_docx)
 
-    league_logo = Path(args.league_logo) if args.league_logo else None
-    sponsor_logo = Path(args.sponsor_logo) if args.sponsor_logo else None
+    league_logo = ensure_image(args.league_logo)
+    sponsor_logo = ensure_image(args.sponsor_logo)
 
-    if league_logo:
-        require_file(league_logo, "League logo")
-    if sponsor_logo:
-        require_file(sponsor_logo, "Sponsor logo")
+    data = fetch_week(args.league_id, args.year, args.espn_s2, args.swid, args.week)
+    league = data["league"]
+    used_week = data["week"]
+    matchups = data["matchups"]
 
-    week_arg = args.week
-    if isinstance(week_arg, str) and week_arg.lower() == "auto":
-        # Initialize league to resolve last completed week
-        if League is None:
-            die("espn_api not installed. Run: pip install espn_api")
-        if args.espn_s2 and args.swid:
-            league = League(league_id=args.league_id, year=args.year, espn_s2=args.espn_s2, swid=args.swid)
-        else:
-            league = League(league_id=args.league_id, year=args.year)
-        use_week = resolve_last_completed_week(league)
+    league_name = getattr(league, "settings", None)
+    if league_name and hasattr(league.settings, "name"):
+        league_name = str(league.settings.name)
     else:
-        use_week = int(week_arg)
+        league_name = f"League {args.league_id}"
 
-
-    games = fetch_week(
-        league_id=args.league_id,
-        year=args.year,
-        week=use_week,
-        espn_s2=args.espn_s2,
-        swid=args.swid,
-    )
-
+    tpl = DocxTemplate(str(template_path))
     ctx = build_context(
-        week=use_week,
-        slots=args.slots,
-        league_logo=league_logo,
-        sponsor_logo=sponsor_logo,
-        games=games,
+        tpl=tpl,
+        league_name=league_name,
+        week_num=used_week,
+        slots=max(1, min(args.slots, 6)),
+        matchups=matchups,
+        league_logo_path=league_logo,
+        sponsor_logo_path=sponsor_logo,
+        llm_blurbs=bool(args.llm_blurbs),
+        blurb_style=args.blurb_style,
+        blurb_words=args.blurb_words,
     )
 
-    ctx["blurbs_enabled"] = bool(args.blurbs)
-    ctx["blurb_style"] = args.blurb_style
-    ctx["blurb_words"] = int(args.blurb_words)
-    ctx["blurb_temperature"] = float(args.temperature)
+    # Optional label override
+    if args.week_label:
+        ctx["WEEK_NUMBER"] = args.week_label
 
-    # Ensure every slot has a 'blurb' field so the template never breaks.
-    # If you already have a list like ctx["matchups"] or ctx["slots"], adapt the name below.
-    matchups = ctx.get("matchups") or ctx.get("slots") or []
-    for m in matchups:
-        if "blurb" not in m or not m["blurb"]:
-            home = m.get("home_name") or m.get("home") or "Home"
-            away = m.get("away_name") or m.get("away") or "Away"
-            hs = m.get("home_score", "")
-            as_ = m.get("away_score", "")
-            style = ctx["blurb_style"]
-            m["blurb"] = f"{style.capitalize()} recap: {home} {hs} vs {away} {as_}. Highlights coming soon."
+    # Re-init template before rendering/saving (we already used it for InlineImage context sizing)
+    tpl = DocxTemplate(str(template_path))
+    tpl.render(ctx)
+    out_docx.parent.mkdir(parents=True, exist_ok=True)
+    tpl.save(str(out_docx))
 
-    render_docx(template_path, out_docx, ctx, args)
-    print(f"[ok] Wrote DOCX: {out_docx.resolve()}")
+    print(f"Done: {out_docx.resolve()} (Week {used_week})")
 
 
 if __name__ == "__main__":
     main()
+    

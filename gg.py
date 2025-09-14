@@ -5,8 +5,8 @@ gg.py — Minimal, reliable DOCX renderer for Gridiron Gazette.
 - Accepts .docx or .dotx template paths.
 - If .dotx is provided, it copies to a sibling .docx and renders from that.
 - Embeds header/footer logos using docxtpl InlineImage with tags:
-    Header: {{ league_logo_tag }}
-    Footer: {{ sponsor_logo_tag }}
+    Header: {{ league_logo }}
+    Footer: {{ sponsor_logo }}
 - Writes a single output .docx
 
 Indentation: spaces only (no tabs).
