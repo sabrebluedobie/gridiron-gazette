@@ -29,11 +29,13 @@ jobs:
           # optional env vars (use repo/environment “variables” if you’ve set them)
           LEAGUE_ID: ${{ env.LEAGUE_ID }}
           YEAR:      ${{ env.YEAR }}
+          TEMPLATE: ${{ env.TEMPLATE }}  
+          OUTDOCX: ${{ env.OUTDOCX }}
         run: |
           mkdir -p recaps
           python build_gazette.py \
-            --template recap_template.docx \
-            --out-docx recaps/Week1_Gazette.docx \
+            --template ${{ env.TEMPLATE }} \
+            --out-docx ${{ env.OUTDOCX }} \
             --league-id "${{ env.LEAGUE_ID }}" \
             --year "${{ env.YEAR }}" \
             --llm-blurbs \
