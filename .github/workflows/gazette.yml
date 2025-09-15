@@ -42,7 +42,7 @@ jobs:
             --week "${{ github.event.inputs.week || '1' }}" \
             --llm-blurbs \
             --blurb-style mascot \
-            --blurb-words 1000 \
+            --blurb-words 500 \
             --temperature 0.4
 
       - name: Upload artifact
