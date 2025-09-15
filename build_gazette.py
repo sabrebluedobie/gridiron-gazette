@@ -6,6 +6,8 @@ import argparse
 from pathlib import Path
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
+from functools import lru_cache
+import re
 import sys
 import traceback
 
@@ -27,51 +29,69 @@ def load_league_config():
     except Exception as e:
         print(f"Error loading leagues.json: {e}")
         raise
+def _normalize_name(s: str) -> str:
+    """
+    Normalize team names and filenames for matching:
+    - lowercase
+    - replace non-alphanumerics with spaces
+    - collapse spaces
+    """
+    s = s.lower()
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
-def simple_logo_for(team_name):
-    """Simple logo finder that works with the generated logos"""
+@lru_cache(maxsize=1)
+def _build_logo_index(root="logos/team_logos"):
+    """
+    Scan logos/team_logos and build a dict of normalized_name -> full path.
+    Supports common raster formats.
+    """
+    root_path = Path(root)
+    exts = {".png", ".jpg", ".jpeg", ".webp"}
+    index = {}
+    if root_path.exists():
+        for p in root_path.rglob("*"):
+            if p.is_file() and p.suffix.lower() in exts:
+                key = _normalize_name(p.stem)
+                index[key] = str(p)
+    return index
+
+def get_team_logo_path(team_name: str) -> str:
+    """
+    Fuzzy match the ESPN team name to a file in logos/team_logos/.
+    Returns a concrete file path if found; otherwise a benign fallback.
+    """
+    index = _build_logo_index()
     if not team_name:
-        return None
-    
-    # Check team_logos.json first
-    try:
-        with open('team_logos.json', 'r') as f:
-            logo_mapping = json.load(f)
-        if team_name in logo_mapping:
-            logo_path = logo_mapping[team_name]
-            if Path(logo_path).exists():
-                return logo_path
-    except:
-        pass
-    
-    # Look for files in logos directories
-    import re
-    safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', team_name)
-    
-    search_dirs = [
-        'logos/generated_logos',
-        'logos/ai', 
-        'logos',
-        'assets/logos'
-    ]
-    
-    for search_dir in search_dirs:
-        base_path = Path(search_dir)
-        if not base_path.exists():
-            continue
-            
-        # Try exact match first
-        for ext in ['.png', '.jpg', '.jpeg', '.webp', '.txt']:
-            candidate = base_path / f"{safe_name}{ext}"
-            if candidate.exists():
-                return str(candidate)
-        
-        # Try partial matches
-        for file_path in base_path.glob("*"):
-            if file_path.is_file() and safe_name.lower() in file_path.stem.lower():
-                return str(file_path)
-    
-    return None
+        return "logos/team_logos/default_team_logo.png"
+
+    norm = _normalize_name(team_name)
+
+    # Exact normalized match
+    if norm in index:
+        return index[norm]
+
+    # Try singular (drop trailing 's')
+    if norm.endswith("s") and norm[:-1] in index:
+        return index[norm[:-1]]
+
+    # Try progressive shortening (drop last tokens)
+    parts = norm.split()
+    while len(parts) > 1:
+        parts.pop()
+        cand = " ".join(parts)
+        if cand in index:
+            return index[cand]
+
+    # Last-resort contains/startswith style scan
+    for k, v in index.items():
+        if norm in k or k in norm:
+            return v
+
+    # Fallback (won't render if file truly doesn't exist—keeps placeholders)
+    return "logos/team_logos/default_team_logo.png"
+
 
 def fetch_espn_data(league_id, year, espn_s2, swid, week_number):
     """Fetch data from ESPN Fantasy API with better error handling"""
@@ -317,7 +337,7 @@ def main():
             'WEEK_NUMBER': args.week,
             'WEEKLY_INTRO': f"Week {args.week} recap for {league_config.get('name')}",
             'FOOTER_NOTE': league_config.get('sponsor', {}).get('line', 'Fantasy Football Gazette'),
-            'SPONSOR_LINE': league_config.get('sponsor', {}).get('line', 'Your weekly fantasy fix'),
+            'SPONSOR_LINE': league_config.get('sponsor', {}).get('line', 'Your weekly fantasy fix.'),
             **espn_data,
             **llm_content
         }
