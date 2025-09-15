@@ -7,6 +7,7 @@ from pathlib import Path
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 from functools import lru_cache
+from glob import glob
 import re
 import sys
 import traceback
@@ -93,7 +94,7 @@ def get_team_logo_path(team_name: str) -> str:
     return "logos/team_logos/default_team_logo.png"
 
 
-def fetch_espn_data(league_id, year, espn_s2, swid, week_number):
+def _espn_data(league_id, year, espn_s2, swid, week_number):
     """Fetch data from ESPN Fantasy API with better error handling"""
     print(f"Connecting to ESPN league {league_id} for week {week_number}")
     
@@ -140,8 +141,9 @@ def fetch_espn_data(league_id, year, espn_s2, swid, week_number):
                 })
                 
                 # Add logos
-                home_logo = simple_logo_for(home_name)
-                away_logo = simple_logo_for(away_name)
+                home_logo = get_team_logo_path(home_name)
+                away_logo = get_team_logo_path(away_name)
+
                 
                 if home_logo:
                     matchup_data[f'MATCHUP{i}_HOME_LOGO_PATH'] = home_logo
@@ -342,63 +344,75 @@ def main():
             **llm_content
         }
         
-        # Add league and sponsor logos if they exist
-        if league_config.get('league_logo'):
-            league_logo_path = Path(league_config['league_logo'])
-            if league_logo_path.exists():
-                context['LEAGUE_LOGO'] = str(league_logo_path)
-        
-        sponsor = league_config.get('sponsor', {})
-        if sponsor.get('logo'):
-            sponsor_logo_path = Path(sponsor['logo'])
-            if sponsor_logo_path.exists():
-                context['SPONSOR_LOGO'] = str(sponsor_logo_path)
-        
-        # Create output directory if it doesn't exist
-        output_path = Path(args.out_docx)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Load and render template
-        print(f"Loading template: {args.template}")
-        doc = DocxTemplate(args.template)
-        
-        # Convert image paths to InlineImage objects
-        print("Processing images...")
-        context = create_image_objects(doc, context)
-        
-        # Debug: Print context summary
-        print(f"\nContext summary:")
-        print(f"  Total keys: {len(context)}")
-        print(f"  Matchup keys: {len([k for k in context.keys() if 'MATCHUP' in k])}")
-        print(f"  Logo keys: {len([k for k in context.keys() if 'LOGO' in k])}")
-        
-        # Check for undeclared template variables
-        try:
-            undeclared = doc.get_undeclared_template_variables(context)
-            if undeclared:
-                print(f"⚠️  Template has undeclared variables: {sorted(undeclared)[:10]}...")
-            else:
-                print("✅ All template variables are declared")
-        except Exception as e:
-            print(f"Could not check template variables: {e}")
-        
-        # Render template
-        print("Rendering template...")
-        doc.render(context)
-        
-        # Save output
-        print(f"Saving to: {args.out_docx}")
-        doc.save(args.out_docx)
-        
-        # Verify file was created
-        if Path(args.out_docx).exists():
-            file_size = Path(args.out_docx).stat().st_size
-            print(f"✅ Gazette saved successfully!")
-            print(f"   File: {args.out_docx}")
-            print(f"   Size: {file_size:,} bytes")
+# ...
+# Add league and sponsor logos if they exist
+if league_config.get('league_logo'):
+    lp = Path(league_config['league_logo'])
+    if lp.exists():
+        context['LEAGUE_LOGO'] = str(lp)
+else:
+    # gentle fallback search
+    candidates = glob("logos/*league*.png") + glob("logos/*league*.jpg") + glob("logos/*league*.jpeg") + glob("logos/*league*.webp")
+    if candidates:
+        context['LEAGUE_LOGO'] = candidates[0]
+
+sponsor = league_config.get('sponsor', {})
+if sponsor.get('logo'):
+    sp = Path(sponsor['logo'])
+    if sp.exists():
+        context['SPONSOR_LOGO'] = str(sp)
+else:
+    candidates = glob("logos/*sponsor*.png") + glob("logos/*sponsor*.jpg") + glob("logos/*sponsor*.jpeg") + glob("logos/*sponsor*.webp")
+    if candidates:
+        context['SPONSOR_LOGO'] = candidates[0]
+
+    # Create output directory if it doesn't exist
+    output_path = Path(args.out_docx)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load and render template
+    print(f"Loading template: {args.template}")
+    doc = DocxTemplate(args.template)
+
+    # Convert image paths to InlineImage objects
+    print("Processing images...")
+    context = create_image_objects(doc, context)
+
+    # Debug: Print context summary
+    print(f"\nContext summary:")
+    print(f"  Total keys: {len(context)}")
+    print(f"  Matchup keys: {len([k for k in context.keys() if 'MATCHUP' in k])}")
+    print(f"  Logo keys: {len([k for k in context.keys() if 'LOGO' in k])}")
+
+    # Check for undeclared template variables
+    try:
+        undeclared = doc.get_undeclared_template_variables(context)
+        if undeclared:
+            print(f"⚠️  Template has undeclared variables: {sorted(undeclared)[:10]}...")
         else:
-            raise RuntimeError("File was not created!")
-            
+            print("✅ All template variables are declared")
+    except Exception as e:
+        print(f"Could not check template variables: {e}")
+
+    # Render template
+    print("Rendering template...")
+    doc.render(context)
+
+    # Save output
+    print(f"Saving to: {args.out_docx}")
+    doc.save(args.out_docx)
+
+    # Verify file was created
+    if Path(args.out_docx).exists():
+        file_size = Path(args.out_docx).stat().st_size
+        print(f"✅ Gazette saved successfully!")
+        print(f"   File: {args.out_docx}")
+        print(f"   Size: {file_size:,} bytes")
+    else:
+        raise RuntimeError("File was not created!")
+        
+        # End of try block
+    
     except Exception as e:
         print(f"❌ Error building gazette: {e}")
         traceback.print_exc()
