@@ -23,30 +23,19 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip "setuptools<81" wheel
-          pip install -r requirements.txt || pip install docxtpl==0.16.7 python-docx==1.1.2 docxcompose==1.4.0 Jinja2==3.1.4 lxml>=5.3 pillow>=10 espn_api openai
-          
+          pip install -r requirements.txt
 
-      - name: Build gazette
+      - name: Debug environment
         env:
-          # Secrets from environment
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ESPN_S2: ${{ secrets.ESPN_S2 }}
           SWID: ${{ secrets.SWID }}
         run: |
-          mkdir -p recaps
-          python build_gazette.py \
-            --template "${{ vars.TEMPLATE || 'recap_template.docx' }}" \
-            --out-docx "${{ vars.OUTDOCX || 'recaps/gazette.docx' }}" \
-            --league-id "${{ vars.LEAGUE_ID || '887998' }}" \
-            --year "${{ vars.YEAR || '2025' }}" \
-            --week "${{ github.event.inputs.week || '1' }}" \
-            --llm-blurbs \
-            --blurb-style mascot \
-            --blurb-words 500 \
-            --temperature 0.4
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: gazette-docx-week-${{ github.event.inputs.week || '1' }}
-          path: recaps/*.docx
+          echo "Python version: $(python --version)"
+          echo "pip list:"
+          pip list | grep -E "(espn|openai|docx|pillow)"
+          echo "Files present:"
+          ls -la *.py *.json 2>/dev/null || echo "Some files missing"
+          echo "ESPN_S2 set: $([[ -n '$ESPN_S2' ]] && echo 'yes' || echo 'no')"
+          echo "SWID set: $([[ -n '$SWID' ]] && echo 'yes' || echo 'no')"
+          echo "OPENAI_API_KEY set: $([[ -n '$OPENAI_API_KEY' ]] && echo
