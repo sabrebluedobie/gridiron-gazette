@@ -2,11 +2,17 @@ name: Build Gazette
 
 on:
   workflow_dispatch:
+    inputs:
+      week:
+        description: 'Week number'
+        required: false
+        default: '1'
+        type: string
 
 jobs:
   build-gazette:
     runs-on: ubuntu-latest
-    environment: production   # <- this is the environment that holds your secrets/vars
+    environment: production
     steps:
       - uses: actions/checkout@v4
 
@@ -17,28 +23,30 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip "setuptools<81" wheel
-          pip install -r requirements.txt || pip install docxtpl==0.16.7 python-docx==1.1.2 docxcompose==1.4.0 Jinja2==3.1.4 lxml>=5.3 pillow>=10 espn_api
+          pip install -r requirements.txt || pip install docxtpl==0.16.7 python-docx==1.1.2 docxcompose==1.4.0 Jinja2==3.1.4 lxml>=5.3 pillow>=10 espn_api openai
           
 
       - name: Build gazette
         env:
-          # these come from your environment-level config (Settings → Environments → <your env>)
+          # Secrets from environment
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ESPN_S2:        ${{ secrets.ESPN_S2 }}
-          SWID:           ${{ secrets.SWID }}
-          # optional env vars (use repo/environment “variables” if you’ve set them)
-          LEAGUE_ID: ${{ env.LEAGUE_ID }}
-          YEAR:      ${{ env.YEAR }}
-          TEMPLATE: ${{ env.TEMPLATE }}  
-          OUTDOCX: ${{ env.OUTDOCX }}
+          ESPN_S2: ${{ secrets.ESPN_S2 }}
+          SWID: ${{ secrets.SWID }}
         run: |
           mkdir -p recaps
           python build_gazette.py \
-            --template ${{ env.TEMPLATE }} \
-            --out-docx ${{ env.OUTDOCX }} \
-            --league-id "${{ env.LEAGUE_ID }}" \
-            --year "${{ env.YEAR }}" \
+            --template "${{ vars.TEMPLATE || 'recap_template.docx' }}" \
+            --out-docx "${{ vars.OUTDOCX || 'recaps/gazette.docx' }}" \
+            --league-id "${{ vars.LEAGUE_ID || '887998' }}" \
+            --year "${{ vars.YEAR || '2025' }}" \
+            --week "${{ github.event.inputs.week || '1' }}" \
             --llm-blurbs \
             --blurb-style mascot \
             --blurb-words 1000 \
             --temperature 0.4
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gazette-docx-week-${{ github.event.inputs.week || '1' }}
+          path: recaps/*.docx
