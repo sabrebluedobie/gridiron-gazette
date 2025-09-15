@@ -36,6 +36,101 @@ jobs:
           pip list | grep -E "(espn|openai|docx|pillow)"
           echo "Files present:"
           ls -la *.py *.json 2>/dev/null || echo "Some files missing"
-          echo "ESPN_S2 set: $([[ -n '$ESPN_S2' ]] && echo 'yes' || echo 'no')"
-          echo "SWID set: $([[ -n '$SWID' ]] && echo 'yes' || echo 'no')"
-          echo "OPENAI_API_KEY set: $([[ -n '$OPENAI_API_KEY' ]] && echo
+          echo "ESPN_S2 set: $([[ -n "$ESPN_S2" ]] && echo 'yes' || echo 'no')"
+          echo "SWID set: $([[ -n "$SWID" ]] && echo 'yes' || echo 'no')"
+          echo "OPENAI_API_KEY set: $([[ -n "$OPENAI_API_KEY" ]] && echo 'yes' || echo 'no')"
+
+      - name: Generate placeholder logos
+        run: |
+          python -c "
+          import json
+          from pathlib import Path
+          import hashlib
+          import re
+          
+          # Create simple text-based logos for testing
+          logos_dir = Path('logos/generated_logos')
+          logos_dir.mkdir(parents=True, exist_ok=True)
+          
+          # Get team names from leagues.json
+          try:
+              leagues = json.loads(Path('leagues.json').read_text())
+              config = leagues[0]
+              
+              # Create a simple mapping
+              team_logos = {}
+              test_teams = ['Storm', 'Wafflers', 'Eagles', 'Panthers', 'Hawks', 'Thunder', 'Rebels', 'Titans', 'Crushers', 'Lightning']
+              
+              for team in test_teams:
+                  safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', team)
+                  logo_path = logos_dir / f'{safe_name}.png'
+                  
+                  # Create a minimal placeholder file
+                  logo_path.write_text(f'Placeholder for {team}')
+                  team_logos[team] = str(logo_path)
+                  print(f'Created placeholder for {team}')
+              
+              # Save mapping
+              Path('team_logos.json').write_text(json.dumps(team_logos, indent=2))
+              print(f'Saved {len(team_logos)} team logo mappings')
+              
+          except Exception as e:
+              print(f'Error creating logos: {e}')
+          "
+
+      - name: Test ESPN connection
+        env:
+          ESPN_S2: ${{ secrets.ESPN_S2 }}
+          SWID: ${{ secrets.SWID }}
+        run: |
+          python -c "
+          import json
+          import os
+          from pathlib import Path
+          
+          try:
+              from espn_api.football import League
+              
+              leagues = json.loads(Path('leagues.json').read_text())
+              config = leagues[0]
+              
+              league = League(
+                  league_id=config['league_id'],
+                  year=config['year'],
+                  espn_s2=os.getenv('ESPN_S2'),
+                  swid=os.getenv('SWID')
+              )
+              
+              print(f'Connected to league: {league.settings.name}')
+              print(f'Teams: {len(league.teams)}')
+              for team in league.teams:
+                  print(f'  - {team.team_name}')
+              
+              # Test getting week 1 data
+              scoreboard = league.scoreboard(week=1)
+              print(f'Week 1 games: {len(scoreboard)}')
+              
+          except Exception as e:
+              print(f'ESPN test failed: {e}')
+              import traceback
+              traceback.print_exc()
+          "
+
+      - name: Build gazette
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ESPN_S2: ${{ secrets.ESPN_S2 }}
+          SWID: ${{ secrets.SWID }}
+        run: |
+          mkdir -p recaps
+          python build_gazette.py \
+            --template "${{ vars.TEMPLATE || 'recap_template.docx' }}" \
+            --out-docx "${{ vars.OUTDOCX || 'recaps/gazette.docx' }}" \
+            --league-id "${{ vars.LEAGUE_ID || '887998' }}" \
+            --year "${{ vars.YEAR || '2025' }}" \
+            --week "${{ github.event.inputs.week || '1' }}" \
+            --llm-blurbs \
+            --blurb-style mascot \
+            --blurb-words 500 \
+            --temperature 0.4 \
+            --slots 10
