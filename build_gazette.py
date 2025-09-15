@@ -305,25 +305,40 @@ def _find_dst_note(lineup, team_label):
     return ""
 
 
-def generate_llm_content(matchup_data, style="mascot", words=500, temperature=0.4):
-    """Generate LLM content if requested"""
-    openai_key = get_openai_key()
-    if not openai_key:
-        print("⚠️  No OpenAI API key found, skipping LLM blurbs")
-        return {}
+def _fallback_blurb(i, md):
+    h, a = md.get(f'MATCHUP{i}_HOME'), md.get(f'MATCHUP{i}_AWAY')
+    hs, as_ = md.get(f'MATCHUP{i}_HS'), md.get(f'MATCHUP{i}_AS')
+    try:
+        hs_f, as_f = float(hs), float(as_)
+        if hs_f >= as_f:
+            winner, loser, ws, ls = h, a, hs_f, as_f
+        else:
+            winner, loser, ws, ls = a, h, as_f, hs_f
+        return f"{winner} beat {loser} {ws:.1f}-{ls:.1f}. A solid, no-frills win; key plays swung late and the box score tells the tale."
+    except Exception:
+        return f"{h} vs {a}: Preview—both sides bring strengths; expect a tight one."
 
+def generate_llm_content(matchup_data, style="mascot", words=500, temperature=0.4):
+    openai_key = get_openai_key()
+    llm_content = {}
+
+    # If no key or OpenAI import fails, fill deterministic fallback blurbs.
+    if not openai_key:
+        for i in range(1, 11):
+            if f'MATCHUP{i}_HOME' in matchup_data:
+                llm_content[f'MATCHUP{i}_BLURB'] = _fallback_blurb(i, matchup_data)
+        print("⚠️  No OpenAI API key found—using fallback blurbs.")
+        return llm_content
     try:
         from openai import OpenAI
         client = OpenAI(api_key=openai_key)
         print(f"Generating LLM blurbs in {style} style...")
-    except ImportError:
-        print("⚠️  OpenAI library not available, skipping LLM blurbs")
-        return {}
-    except Exception as e:
-        print(f"⚠️  Error initializing OpenAI: {e}")
-        return {}
-
-    llm_content = {}
+    except Exception:
+        for i in range(1, 11):
+            if f'MATCHUP{i}_HOME' in matchup_data:
+                llm_content[f'MATCHUP{i}_BLURB'] = _fallback_blurb(i, matchup_data)
+        print("⚠️  OpenAI unavailable—using fallback blurbs.")
+        return llm_content
 
 def _best_player(lineup):
     starters = [p for p in lineup if _is_starter(p)]
