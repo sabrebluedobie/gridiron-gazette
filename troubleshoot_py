@@ -130,3 +130,132 @@ def check_logo_system():
         if path.exists():
             files = list(path.glob('*.*'))
             total_logos += len(files)
+            print(f"✅ {logo_dir}: {len(files)} files")
+        else:
+            print(f"❌ {logo_dir}: Directory not found")
+    
+    # Check team_logos.json
+    mapping_file = Path('team_logos.json')
+    if mapping_file.exists():
+        try:
+            with open(mapping_file) as f:
+                mapping = json.load(f)
+            print(f"✅ team_logos.json: {len(mapping)} team mappings")
+            
+            # Show first few mappings
+            for i, (team, path) in enumerate(list(mapping.items())[:3]):
+                exists = "✅" if Path(path).exists() else "❌"
+                print(f"   {exists} {team}: {path}")
+            
+        except Exception as e:
+            print(f"❌ team_logos.json: Error reading - {e}")
+    else:
+        print("❌ team_logos.json: File not found")
+    
+    print(f"Total logo files found: {total_logos}")
+
+def test_template():
+    """Test template loading"""
+    print("\n=== Template Test ===")
+    
+    template_file = Path('recap_template.docx')
+    if not template_file.exists():
+        print("❌ recap_template.docx not found")
+        return False
+    
+    try:
+        from docxtpl import DocxTemplate
+        
+        doc = DocxTemplate(str(template_file))
+        print("✅ Template loaded successfully")
+        
+        # Try to get template variables
+        try:
+            # Test with minimal context
+            test_context = {
+                'WEEK_NUMBER': 1,
+                'title': 'Test',
+                'MATCHUP1_HOME': 'Team A',
+                'MATCHUP1_AWAY': 'Team B'
+            }
+            
+            undeclared = doc.get_undeclared_template_variables(test_context)
+            if undeclared:
+                print(f"Template variables found: {len(undeclared)}")
+                print(f"First 10: {sorted(list(undeclared))[:10]}")
+            else:
+                print("✅ Template variables all satisfied by test context")
+                
+        except Exception as e:
+            print(f"Could not analyze template variables: {e}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error loading template: {e}")
+        return False
+
+def create_minimal_test():
+    """Create a minimal test that should work"""
+    print("\n=== Creating Minimal Test ===")
+    
+    try:
+        # Create minimal team logos
+        logos_dir = Path('logos/generated_logos')
+        logos_dir.mkdir(parents=True, exist_ok=True)
+        
+        test_teams = ['Storm', 'Eagles', 'Panthers', 'Hawks']
+        team_logos = {}
+        
+        for team in test_teams:
+            logo_file = logos_dir / f'{team}.txt'
+            logo_file.write_text(f'Test logo for {team}')
+            team_logos[team] = str(logo_file)
+        
+        # Save mapping
+        with open('team_logos.json', 'w') as f:
+            json.dump(team_logos, f, indent=2)
+        
+        print(f"✅ Created {len(test_teams)} test logos")
+        
+        # Test the build command that should work
+        print("\nRecommended test command:")
+        print("python build_gazette.py \\")
+        print("  --template recap_template.docx \\")
+        print("  --out-docx test_gazette.docx \\")
+        print("  --league-id 887998 \\")
+        print("  --year 2025 \\")
+        print("  --week 1 \\")
+        print("  --slots 6")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error creating test setup: {e}")
+        return False
+
+def main():
+    """Run all diagnostics"""
+    print("🔍 Gridiron Gazette Troubleshooter\n")
+    
+    check_environment()
+    check_files()
+    
+    espn_ok = test_espn_connection()
+    check_logo_system()
+    template_ok = test_template()
+    
+    if espn_ok and template_ok:
+        create_minimal_test()
+    
+    print("\n=== Summary ===")
+    print("If you see ❌ errors above, fix those first.")
+    print("If everything shows ✅, try running the recommended test command.")
+    print("\nFor GitHub Actions, make sure:")
+    print("1. ESPN_S2 and SWID are set as repository secrets")
+    print("2. OPENAI_API_KEY is set as a repository secret") 
+    print("3. recap_template.docx is committed to the repository")
+    print("4. The workflow creates the output directory before building")
+
+if __name__ == "__main__":
+    main()
