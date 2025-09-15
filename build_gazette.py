@@ -92,7 +92,7 @@ def fetch_espn_data(league_id, year, espn_s2, swid, week_number):
         
         # Log team names
         for i, team in enumerate(league.teams, 1):
-            print(f"  {i}. {team.team_name} (Owner: {team.owner})")
+            print(f"  {i}. {team.team_name}")
         
         # Get matchups for the specified week
         matchups = league.scoreboard(week=week_number)
