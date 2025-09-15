@@ -30,6 +30,7 @@ def load_league_config():
     except Exception as e:
         print(f"Error loading leagues.json: {e}")
         raise
+
 def _normalize_name(s: str) -> str:
     """
     Normalize team names and filenames for matching:
@@ -93,10 +94,6 @@ def get_team_logo_path(team_name: str) -> str:
     # Fallback (won't render if file truly doesn't exist—keeps placeholders)
     return "logos/team_logos/default_team_logo.png"
 
-# Add this function to your build_gazette.py after the existing logo functions
-
-# Replace your find_or_create_logo function with this safer version:
-
 def find_or_create_logo(logo_path, fallback_name):
     """Find an existing logo or skip if not found"""
     if not logo_path:
@@ -122,50 +119,38 @@ def find_or_create_logo(logo_path, fallback_name):
     print(f"No image file found for {logo_path} - skipping logo")
     return None
 
-# Also update your create_image_objects function to handle missing logos better:
+def _is_starter(box_player):
+    slot = getattr(box_player, "slot_position", "") or ""
+    return slot not in {"BE", "IR"}
 
-def create_image_objects(doc, context):
-    """Convert image paths to InlineImage objects"""
-    image_context = {}
-    
-    for key, value in context.items():
-        if key.endswith('_LOGO_PATH') and value and Path(value).exists():
-            # Convert path to InlineImage object
-            logo_key = key.replace('_PATH', '')
-            try:
-                # Check if it's actually an image file
-                if Path(value).suffix.lower() in {'.png', '.jpg', '.jpeg', '.webp', '.gif'}:
-                    image_context[logo_key] = InlineImage(doc, value, width=Mm(25))
-                    print(f"✅ Loaded image for {logo_key}: {value}")
-                else:
-                    print(f"⚠️  Skipping non-image file for {logo_key}: {value}")
-                    # Don't add the logo - template will show placeholder or nothing
-            except Exception as e:
-                print(f"⚠️  Error loading image {value}: {e}")
-                
-        elif key in ['LEAGUE_LOGO', 'SPONSOR_LOGO']:
-            # Handle league and sponsor logos
-            if isinstance(value, str) and Path(value).exists():
-                try:
-                    # Check if it's actually an image file
-                    if Path(value).suffix.lower() in {'.png', '.jpg', '.jpeg', '.webp', '.gif'}:
-                        # Resize sponsor logo to be smaller (you said it was too big)
-                        width = Mm(20) if key == 'SPONSOR_LOGO' else Mm(30)
-                        image_context[key] = InlineImage(doc, value, width=width)
-                        print(f"✅ Loaded {key}: {value} (width: {width})")
-                    else:
-                        print(f"⚠️  Skipping non-image file for {key}: {value}")
-                except Exception as e:
-                    print(f"⚠️  Error loading {key}: {e}")
-        else:
-            image_context[key] = value
-    
-    return image_context
+def _fmt_pts(x):
+    try:
+        return f"{float(x):.1f}"
+    except Exception:
+        return str(x)
 
-# Then in your main() function, replace the league/sponsor logo section with:
+def _best_player(lineup):
+    starters = [p for p in lineup if _is_starter(p)]
+    return max(starters, key=lambda p: getattr(p, "points", 0.0)) if starters else None
 
-        # Add league and sponsor logos with better handling
-        
+def _bust_player(lineup):
+    starters = [p for p in lineup if _is_starter(p)]
+    if not starters:
+        return None
+    candidates = [p for p in starters if (getattr(p, "projected_points", 0.0) or 0.0) >= 8.0]
+    if not candidates:
+        candidates = starters
+    return min(candidates, key=lambda p: getattr(p, "points", 0.0))
+
+def _find_dst_note(lineup, team_label):
+    starters = [p for p in lineup if _is_starter(p)]
+    for p in starters:
+        pos = (getattr(p, "position", "") or "").upper()
+        name = getattr(p, "name", "") or ""
+        pts = getattr(p, "points", 0.0) or 0.0
+        if ("D/ST" in pos or "D/ST" in name.upper()) and pts >= 8.0:
+            return f"{team_label} D/ST chipped in {_fmt_pts(pts)}."
+    return ""
 
 def fetch_espn_data(league_id, year, espn_s2, swid, week_number):
     """Fetch data from ESPN Fantasy API with better error handling"""
@@ -181,7 +166,7 @@ def fetch_espn_data(league_id, year, espn_s2, swid, week_number):
             swid=swid
         )
         
-        print(f"✅ Connected to league: {league.settings.name}")
+        print(f"Connected to league: {league.settings.name}")
         print(f"Teams in league: {len(league.teams)}")
         
         # Log team names
@@ -276,12 +261,12 @@ def fetch_espn_data(league_id, year, espn_s2, swid, week_number):
                 matchup_data[f'MATCHUP{i}_AWAY_PLAYERS'] = [getattr(p, 'name', '') for p in away_lineup if _is_starter(p)][:18]
 
         except Exception as e:
-            print(f"⚠️  Box score spotlight unavailable: {e}")
+            print(f"Box score spotlight unavailable: {e}")
 
         return matchup_data
         
     except Exception as e:
-        print(f"❌ Error fetching ESPN data: {e}")
+        print(f"Error fetching ESPN data: {e}")
         traceback.print_exc()
         raise
 
@@ -356,156 +341,11 @@ def calculate_awards(matchup_data):
     
     return awards
 
-# Then in your main() function, after you fetch ESPN data but before building the context, add this:
-# Fetch ESPN data
-espn_data = fetch_espn_data(
-    league_id=int(args.league_id),
-    year=args.year,
-    espn_s2=espn_creds['espn_s2'],
-    swid=espn_creds['swid'],
-    week_number=args.week
-)
-
-if not espn_data:
-    raise RuntimeError(f"No ESPN data found for week {args.week}")
-
-# Calculate awards
-awards = calculate_awards(espn_data)
-
-# Generate LLM content if requested
-llm_content = {}
-if args.llm_blurbs:
-    llm_content = generate_llm_content(
-        espn_data, 
-        style=args.blurb_style, 
-        words=args.blurb_words,
-        temperature=args.temperature
-    )
-
-# Build template context
-espn_data = espn_data or {}
-llm_content = llm_content or {}
-
-context = {
-    'title': league_config.get('name', 'Fantasy Football Gazette'),
-    'WEEK_NUMBER': args.week,
-    'WEEKLY_INTRO': f"Week {args.week} recap for {league_config.get('name')}",
-    'FOOTER_NOTE': league_config.get('sponsor', {}).get('line', 'Fantasy Football Gazette'),
-    'SPONSOR_LINE': league_config.get('sponsor', {}).get('line', 'Your weekly fantasy fix.'),
-    **espn_data,
-    **llm_content,
-    **awards  # Add the awards here
-}
-
-    # ---- Stats Spotlight from box scores ----
-    box_scores = league.box_scores(week=week_number)
-    # Build a quick index by (home_name, away_name) so we can match scoreboard order robustly
-    bs_index = {}
-    for bs in box_scores:
-        h = getattr(bs.home_team, "team_name", "Unknown")
-        a = getattr(bs.away_team, "team_name", "Unknown")
-        bs_index[(h, a)] = bs
-
-    for i in range(1, 11):
-        home = matchup_data.get(f'MATCHUP{i}_HOME')
-        away = matchup_data.get(f'MATCHUP{i}_AWAY')
-        if not home or not away:
-            continue
-        bs = bs_index.get((home, away)) or bs_index.get((away, home))
-        if not bs:
-            continue
-
-        # lineups: lists of BoxPlayer with .name, .points, .projected_points, .slot_position, .position
-        home_lineup = getattr(bs, "home_lineup", []) if getattr(bs, "home_team", None) and getattr(bs.home_team, "team_name", None) == home else getattr(bs, "away_lineup", [])
-        away_lineup = getattr(bs, "away_lineup", []) if getattr(bs, "away_team", None) and getattr(bs.away_team, "team_name", None) == away else getattr(bs, "home_lineup", [])
-
-        top_h = _best_player(home_lineup)
-        top_a = _best_player(away_lineup)
-        bust = _bust_player((home_lineup or []) + (away_lineup or []))
-
-        matchup_data[f'MATCHUP{i}_TOP_HOME'] = f"{getattr(top_h, 'name', '—')} ({_fmt_pts(getattr(top_h, 'points', 0))})" if top_h else "—"
-        matchup_data[f'MATCHUP{i}_TOP_AWAY'] = f"{getattr(top_a, 'name', '—')} ({_fmt_pts(getattr(top_a, 'points', 0))})" if top_a else "—"
-        matchup_data[f'MATCHUP{i}_BUST'] = f"{getattr(bust, 'name', '—')} ({_fmt_pts(getattr(bust, 'points', 0))})" if bust else "—"
-
-        # Key play: lightweight, ties winner's top scorer to result
-        hs = matchup_data.get(f'MATCHUP{i}_HS', 0.0) or 0.0
-        as_ = matchup_data.get(f'MATCHUP{i}_AS', 0.0) or 0.0
-        winner = home if (float(hs) >= float(as_)) else away
-        top_w = top_h if winner == home else top_a
-        if top_w:
-            matchup_data[f'MATCHUP{i}_KEYPLAY'] = f"{winner} rode {getattr(top_w, 'name', 'their star')}’s {_fmt_pts(getattr(top_w, 'points', 0))} to slam the door."
-        else:
-            matchup_data[f'MATCHUP{i}_KEYPLAY'] = "Late surge sealed it."
-
-        # Defense note: prefer D/ST mention, else generic
-        dn = _find_dst_note(home_lineup, f"{home}") or _find_dst_note(away_lineup, f"{away}")
-        matchup_data[f'MATCHUP{i}_DEF'] = dn or "Defenses traded blows without a true game-swinger."
-
-        # Also stash starters’ names to ground blurbs
-        matchup_data[f'MATCHUP{i}_HOME_PLAYERS'] = [getattr(p, 'name', '') for p in home_lineup if _is_starter(p)][:18]
-        matchup_data[f'MATCHUP{i}_AWAY_PLAYERS'] = [getattr(p, 'name', '') for p in away_lineup if _is_starter(p)][:18]
-
-    return matchup_data
-
-except Exception as e:
-    print(f"❌ Error fetching ESPN data: {e}")
-    traceback.print_exc()
-    raise
-
-def _is_starter(box_player):
-    slot = getattr(box_player, "slot_position", "") or ""
-    return slot not in {"BE", "IR"}
-
-def _fmt_pts(x):
-    try:
-        return f"{float(x):.1f}"
-    except Exception:
-        return str(x)
-
-def _best_player(lineup):
-    starters = [p for p in lineup if _is_starter(p)]
-    return max(starters, key=lambda p: getattr(p, "points", 0.0)) if starters else None
-
-def _bust_player(lineup):
-    starters = [p for p in lineup if _is_starter(p)]
-    if not starters:
-        return None
-    candidates = [p for p in starters if (getattr(p, "projected_points", 0.0) or 0.0) >= 8.0]
-    if not candidates:
-        candidates = starters
-    return min(candidates, key=lambda p: getattr(p, "points", 0.0))
-
-def _find_dst_note(lineup, team_label):
-    starters = [p for p in lineup if _is_starter(p)]
-    for p in starters:
-        pos = (getattr(p, "position", "") or "").upper()
-        name = getattr(p, "name", "") or ""
-        pts = getattr(p, "points", 0.0) or 0.0
-        if ("D/ST" in pos or "D/ST" in name.upper()) and pts >= 8.0:
-            return f"{team_label} D/ST chipped in {_fmt_pts(pts)}."
-    return ""
-
-
-def _fallback_blurb(i, md):
-    h, a = md.get(f'MATCHUP{i}_HOME'), md.get(f'MATCHUP{i}_AWAY')
-    hs, as_ = md.get(f'MATCHUP{i}_HS'), md.get(f'MATCHUP{i}_AS')
-    try:
-        hs_f, as_f = float(hs), float(as_)
-        if hs_f >= as_f:
-            winner, loser, ws, ls = h, a, hs_f, as_f
-        else:
-            winner, loser, ws, ls = a, h, as_f, hs_f
-        return f"{winner} beat {loser} {ws:.1f}-{ls:.1f}. A solid, no-frills win; key plays swung late and the box score tells the tale."
-    except Exception:
-        return f"{h} vs {a}: Preview—both sides bring strengths; expect a tight one."
-
-# Replace your generate_llm_content function with this corrected version:
-
 def generate_llm_content(matchup_data, style="mascot", words=500, temperature=0.4):
     """Generate LLM content if requested"""
     openai_key = get_openai_key()
     if not openai_key:
-        print("⚠️  No OpenAI API key found, skipping LLM blurbs")
+        print("No OpenAI API key found, skipping LLM blurbs")
         return {}
 
     try:
@@ -513,10 +353,10 @@ def generate_llm_content(matchup_data, style="mascot", words=500, temperature=0.
         client = OpenAI(api_key=openai_key)
         print(f"Generating LLM blurbs in {style} style...")
     except ImportError:
-        print("⚠️  OpenAI library not available, skipping LLM blurbs")
+        print("OpenAI library not available, skipping LLM blurbs")
         return {}
     except Exception as e:
-        print(f"⚠️  Error initializing OpenAI: {e}")
+        print(f"Error initializing OpenAI: {e}")
         return {}
 
     llm_content = {}
@@ -582,9 +422,9 @@ Style notes for {style}:
             )
             content = response.choices[0].message.content.strip()
             llm_content[f'MATCHUP{i}_BLURB'] = content
-            print(f"✅ Generated blurb for {home} vs {away} ({len(content)} chars)")
+            print(f"Generated blurb for {home} vs {away} ({len(content)} chars)")
         except Exception as e:
-            print(f"⚠️  Error generating LLM content for matchup {i}: {e}")
+            print(f"Error generating LLM content for matchup {i}: {e}")
             llm_content[f'MATCHUP{i}_BLURB'] = f"Exciting matchup between {home} and {away}! Check back for detailed analysis."
     
     print(f"Generated {len(llm_content)} LLM blurbs")
@@ -599,19 +439,29 @@ def create_image_objects(doc, context):
             # Convert path to InlineImage object
             logo_key = key.replace('_PATH', '')
             try:
-                image_context[logo_key] = InlineImage(doc, value, width=Mm(25))
-                print(f"✅ Loaded image for {logo_key}: {value}")
+                # Check if it's actually an image file
+                if Path(value).suffix.lower() in {'.png', '.jpg', '.jpeg', '.webp', '.gif'}:
+                    image_context[logo_key] = InlineImage(doc, value, width=Mm(25))
+                    print(f"Loaded image for {logo_key}: {value}")
+                else:
+                    print(f"Skipping non-image file for {logo_key}: {value}")
             except Exception as e:
-                print(f"⚠️  Error loading image {value}: {e}")
-                image_context[logo_key] = "[logo-error]"
+                print(f"Error loading image {value}: {e}")
+                
         elif key in ['LEAGUE_LOGO', 'SPONSOR_LOGO']:
             # Handle league and sponsor logos
             if isinstance(value, str) and Path(value).exists():
                 try:
-                    image_context[key] = InlineImage(doc, value, width=Mm(30))
-                    print(f"✅ Loaded {key}: {value}")
+                    # Check if it's actually an image file
+                    if Path(value).suffix.lower() in {'.png', '.jpg', '.jpeg', '.webp', '.gif'}:
+                        # Resize sponsor logo to be smaller
+                        width = Mm(20) if key == 'SPONSOR_LOGO' else Mm(30)
+                        image_context[key] = InlineImage(doc, value, width=width)
+                        print(f"Loaded {key}: {value} (width: {width})")
+                    else:
+                        print(f"Skipping non-image file for {key}: {value}")
                 except Exception as e:
-                    print(f"⚠️  Error loading {key}: {e}")
+                    print(f"Error loading {key}: {e}")
         else:
             image_context[key] = value
     
@@ -667,6 +517,9 @@ def main():
         if not espn_data:
             raise RuntimeError(f"No ESPN data found for week {args.week}")
         
+        # Calculate awards
+        awards = calculate_awards(espn_data)
+        
         # Generate LLM content if requested
         llm_content = {}
         if args.llm_blurbs:
@@ -678,9 +531,6 @@ def main():
             )
         
         # Build template context
-        espn_data = espn_data or {}
-        llm_content = llm_content or {}
-    
         context = {
             'title': league_config.get('name', 'Fantasy Football Gazette'),
             'WEEK_NUMBER': args.week,
@@ -688,11 +538,11 @@ def main():
             'FOOTER_NOTE': league_config.get('sponsor', {}).get('line', 'Fantasy Football Gazette'),
             'SPONSOR_LINE': league_config.get('sponsor', {}).get('line', 'Your weekly fantasy fix.'),
             **espn_data,
-            **llm_content
+            **llm_content,
+            **awards
         }
         
-# ...
-        # Add league and sponsor logos if they exist (from leagues.json)
+        # Add league and sponsor logos if they exist
         if league_config.get('league_logo'):
             league_logo_path = find_or_create_logo(
                 league_config['league_logo'], 
@@ -712,7 +562,6 @@ def main():
                 context['SPONSOR_LOGO'] = sponsor_logo_path
                 print(f"Sponsor logo: {sponsor_logo_path}")
 
-
         # Create output directory if it doesn't exist
         output_path = Path(args.out_docx)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -730,14 +579,15 @@ def main():
         print(f"  Total keys: {len(context)}")
         print(f"  Matchup keys: {len([k for k in context.keys() if 'MATCHUP' in k])}")
         print(f"  Logo keys: {len([k for k in context.keys() if 'LOGO' in k])}")
+        print(f"  Award keys: {len([k for k in context.keys() if 'AWARD' in k])}")
 
         # Optional: sanity check undeclared variables
         try:
             undeclared = doc.get_undeclared_template_variables(context)
             if undeclared:
-                print(f"⚠️  Template has undeclared variables: {sorted(undeclared)[:10]}...")
+                print(f"Template has undeclared variables: {sorted(undeclared)[:10]}...")
             else:
-                print("✅ All template variables are declared")
+                print("All template variables are declared")
         except Exception as e:
             print(f"Could not check template variables: {e}")
 
@@ -749,15 +599,14 @@ def main():
 
         if Path(args.out_docx).exists():
             file_size = Path(args.out_docx).stat().st_size
-            print(f"✅ Gazette saved successfully!  ({file_size:,} bytes)")
+            print(f"Gazette saved successfully!  ({file_size:,} bytes)")
         else:
             raise RuntimeError("File was not created!")
 
     except Exception as e:
-        print(f"❌ Error building gazette: {e}")
+        print(f"Error building gazette: {e}")
         traceback.print_exc()
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()
