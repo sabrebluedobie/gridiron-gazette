@@ -86,9 +86,10 @@ def generate_llm_content(matchup_data, style="mascot", words=1000):
             
             try:
                 response = client.chat.completions.create(
-                    model="gpt-3.5-turbo",
+                    model="gpt-4.1-mini-2025-04-14",
                     messages=[{"role": "user", "content": prompt}],
-                    max_tokens=words + 100
+                    max_tokens=words + 100,
+                    temperature=0.4
                 )
                 llm_content[f'MATCHUP{i}_BLURB'] = response.choices[0].message.content
             except Exception as e:
