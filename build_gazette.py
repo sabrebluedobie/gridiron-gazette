@@ -93,6 +93,42 @@ def get_team_logo_path(team_name: str) -> str:
     # Fallback (won't render if file truly doesn't exist—keeps placeholders)
     return "logos/team_logos/default_team_logo.png"
 
+# Add this function to your build_gazette.py after the existing logo functions
+
+def find_or_create_logo(logo_path, fallback_name):
+    """Find an existing logo or create a placeholder"""
+    if not logo_path:
+        return None
+        
+    path = Path(logo_path)
+    
+    # If the exact path exists, use it
+    if path.exists():
+        return str(path)
+    
+    # Try to find similar files in the directory
+    if path.parent.exists():
+        stem = path.stem.lower()
+        for file in path.parent.glob("*"):
+            if file.is_file() and stem in file.stem.lower():
+                print(f"Found similar logo: {file} for {logo_path}")
+                return str(file)
+    
+    # Create a simple placeholder
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        placeholder_path = path.with_suffix('.txt')
+        placeholder_path.write_text(f"Placeholder logo for {fallback_name}")
+        print(f"Created placeholder logo: {placeholder_path}")
+        return str(placeholder_path)
+    except Exception as e:
+        print(f"Could not create placeholder for {logo_path}: {e}")
+        return None
+
+# Then in your main() function, replace the league/sponsor logo section with:
+
+        # Add league and sponsor logos with better handling
+        
 
 def fetch_espn_data(league_id, year, espn_s2, swid, week_number):
     """Fetch data from ESPN Fantasy API with better error handling"""
@@ -318,56 +354,27 @@ def _fallback_blurb(i, md):
     except Exception:
         return f"{h} vs {a}: Preview—both sides bring strengths; expect a tight one."
 
-def generate_llm_content(matchup_data, style="mascot", words=500, temperature=0.4):
-    openai_key = get_openai_key()
-    llm_content = {}
+# Replace your generate_llm_content function with this corrected version:
 
-    # If no key or OpenAI import fails, fill deterministic fallback blurbs.
+def generate_llm_content(matchup_data, style="mascot", words=500, temperature=0.4):
+    """Generate LLM content if requested"""
+    openai_key = get_openai_key()
     if not openai_key:
-        for i in range(1, 11):
-            if f'MATCHUP{i}_HOME' in matchup_data:
-                llm_content[f'MATCHUP{i}_BLURB'] = _fallback_blurb(i, matchup_data)
-        print("⚠️  No OpenAI API key found—using fallback blurbs.")
-        return llm_content
+        print("⚠️  No OpenAI API key found, skipping LLM blurbs")
+        return {}
+
     try:
         from openai import OpenAI
         client = OpenAI(api_key=openai_key)
         print(f"Generating LLM blurbs in {style} style...")
-    except Exception:
-        for i in range(1, 11):
-            if f'MATCHUP{i}_HOME' in matchup_data:
-                llm_content[f'MATCHUP{i}_BLURB'] = _fallback_blurb(i, matchup_data)
-        print("⚠️  OpenAI unavailable—using fallback blurbs.")
-        return llm_content
+    except ImportError:
+        print("⚠️  OpenAI library not available, skipping LLM blurbs")
+        return {}
+    except Exception as e:
+        print(f"⚠️  Error initializing OpenAI: {e}")
+        return {}
 
-def _best_player(lineup):
-    starters = [p for p in lineup if _is_starter(p)]
-    if not starters:
-        return None
-    return max(starters, key=lambda p: getattr(p, "points", 0.0))
-
-def _bust_player(lineup):
-    starters = [p for p in lineup if _is_starter(p)]
-    if not starters:
-        return None
-    # “Bust” = low actual with at-least-modest projection (>= 8.0)
-    candidates = [p for p in starters if (getattr(p, "projected_points", 0.0) or 0.0) >= 8.0]
-    if not candidates:
-        # fall back to absolute lowest starter
-        candidates = starters
-    return min(candidates, key=lambda p: getattr(p, "points", 0.0))
-
-def _find_dst_note(lineup, team_label):
-    # If a D/ST starter scored well, mention it
-    starters = [p for p in lineup if _is_starter(p)]
-    for p in starters:
-        pos = (getattr(p, "position", "") or "").upper()
-        name = getattr(p, "name", "") or ""
-        pts = getattr(p, "points", 0.0) or 0.0
-        if ("D/ST" in pos or "D/ST" in name.upper()) and pts >= 8.0:
-            return f"{team_label} D/ST chipped in {_fmt_pts(pts)}."
-    return ""
-
+    llm_content = {}
     
     # Generate blurbs for each matchup
     for i in range(1, 11):  # Up to 10 matchups
@@ -383,6 +390,11 @@ def _find_dst_note(lineup, team_label):
         away = matchup_data[away_key]
         home_score = matchup_data.get(hs_key, 'TBD')
         away_score = matchup_data.get(as_key, 'TBD')
+        
+        # Get additional context if available
+        top_home = matchup_data.get(f'MATCHUP{i}_TOP_HOME', '')
+        top_away = matchup_data.get(f'MATCHUP{i}_TOP_AWAY', '')
+        bust = matchup_data.get(f'MATCHUP{i}_BUST', '')
         
         # Create a contextual prompt
         if home_score != 'TBD' and away_score != 'TBD':
@@ -400,11 +412,17 @@ def _find_dst_note(lineup, team_label):
 
 {winner} defeated {loser} with a final score of {winning_score:.1f} to {losing_score:.1f}.
 
-Style notes:
-- {style} style means {"use team mascot personalities and characteristics" if style == "mascot" else "conversational, buddy-talk style" if style == "rtg" else "standard sports journalism"}
-- Focus on fantasy football implications
-- Keep it engaging but realistic
-- Mention key performances that led to the win"""
+Key performers:
+- {home} top scorer: {top_home or 'Unknown'}
+- {away} top scorer: {top_away or 'Unknown'}
+- Biggest bust: {bust or 'Unknown'}
+
+Style notes for {style}:
+- {"Use team mascot personalities and characteristics in the narrative" if style == "mascot" else "Use conversational, buddy-talk style like friends discussing the game" if style == "rtg" else "Use standard sports journalism style"}
+- Focus on fantasy football implications and what managers should know
+- Keep it engaging but grounded in the actual game results
+- Mention the key performances that led to the outcome"""
+
             except (ValueError, TypeError):
                 prompt = f"Write a {words}-word {style}-style fantasy football preview for {home} vs {away}."
         else:
@@ -419,10 +437,10 @@ Style notes:
             )
             content = response.choices[0].message.content.strip()
             llm_content[f'MATCHUP{i}_BLURB'] = content
-            print(f"✅ Generated blurb for {home} vs {away}")
+            print(f"✅ Generated blurb for {home} vs {away} ({len(content)} chars)")
         except Exception as e:
             print(f"⚠️  Error generating LLM content for matchup {i}: {e}")
-            llm_content[f'MATCHUP{i}_BLURB'] = f"Exciting matchup between {home} and {away}!"
+            llm_content[f'MATCHUP{i}_BLURB'] = f"Exciting matchup between {home} and {away}! Check back for detailed analysis."
     
     print(f"Generated {len(llm_content)} LLM blurbs")
     return llm_content
@@ -531,15 +549,24 @@ def main():
 # ...
         # Add league and sponsor logos if they exist (from leagues.json)
         if league_config.get('league_logo'):
-            league_logo_path = Path(league_config['league_logo'])
-            if league_logo_path.exists():
-                context['LEAGUE_LOGO'] = str(league_logo_path)
+            league_logo_path = find_or_create_logo(
+                league_config['league_logo'], 
+                league_config.get('name', 'League')
+            )
+            if league_logo_path:
+                context['LEAGUE_LOGO'] = league_logo_path
+                print(f"League logo: {league_logo_path}")
 
         sponsor = league_config.get('sponsor', {})
         if sponsor.get('logo'):
-            sponsor_logo_path = Path(sponsor['logo'])
-            if sponsor_logo_path.exists():
-                context['SPONSOR_LOGO'] = str(sponsor_logo_path)
+            sponsor_logo_path = find_or_create_logo(
+                sponsor['logo'], 
+                sponsor.get('name', 'Sponsor')
+            )
+            if sponsor_logo_path:
+                context['SPONSOR_LOGO'] = sponsor_logo_path
+                print(f"Sponsor logo: {sponsor_logo_path}")
+
 
         # Create output directory if it doesn't exist
         output_path = Path(args.out_docx)
