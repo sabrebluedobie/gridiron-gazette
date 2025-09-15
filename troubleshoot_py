@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""
+troubleshoot.py - Quick diagnostic script for Gridiron Gazette
+"""
+
+import os
+import json
+import sys
+from pathlib import Path
+
+def check_environment():
+    """Check environment and credentials"""
+    print("=== Environment Check ===")
+    
+    # Check Python version
+    print(f"Python: {sys.version}")
+    
+    # Check required environment variables
+    env_vars = ['ESPN_S2', 'SWID', 'OPENAI_API_KEY']
+    for var in env_vars:
+        value = os.getenv(var)
+        if value:
+            # Show first/last few characters for security
+            masked = value[:4] + "..." + value[-4:] if len(value) > 8 else "***"
+            print(f"✅ {var}: {masked}")
+        else:
+            print(f"❌ {var}: Not set")
+    
+    # Check required packages
+    packages = [
+        ('espn_api', 'ESPN API'),
+        ('openai', 'OpenAI'),
+        ('docxtpl', 'Document Templates'),
+        ('docx', 'Python-DOCX')
+    ]
+    
+    print("\n=== Package Check ===")
+    for package, name in packages:
+        try:
+            __import__(package)
+            print(f"✅ {name}: Installed")
+        except ImportError:
+            print(f"❌ {name}: Missing")
+
+def check_files():
+    """Check required files"""
+    print("\n=== File Check ===")
+    
+    required_files = [
+        ('leagues.json', 'League configuration'),
+        ('build_gazette.py', 'Main build script'),
+        ('recap_template.docx', 'Word template')
+    ]
+    
+    for filename, description in required_files:
+        path = Path(filename)
+        if path.exists():
+            size = path.stat().st_size
+            print(f"✅ {description}: {filename} ({size:,} bytes)")
+        else:
+            print(f"❌ {description}: {filename} (missing)")
+
+def test_espn_connection():
+    """Test ESPN API connection"""
+    print("\n=== ESPN Connection Test ===")
+    
+    try:
+        # Load config
+        with open('leagues.json') as f:
+            config = json.load(f)[0]
+        
+        print(f"League: {config.get('name', 'Unknown')}")
+        print(f"League ID: {config.get('league_id')}")
+        print(f"Year: {config.get('year')}")
+        
+        # Try ESPN connection
+        from espn_api.football import League
+        
+        league = League(
+            league_id=config['league_id'],
+            year=config['year'],
+            espn_s2=os.getenv('ESPN_S2'),
+            swid=os.getenv('SWID')
+        )
+        
+        print(f"✅ Connected to: {league.settings.name}")
+        print(f"Teams: {len(league.teams)}")
+        
+        # Test getting current week
+        try:
+            current_week = league.current_week
+            print(f"Current week: {current_week}")
+        except:
+            print("Could not determine current week")
+        
+        # Test getting a scoreboard
+        try:
+            scoreboard = league.scoreboard(week=1)
+            print(f"✅ Week 1 scoreboard: {len(scoreboard)} games")
+            
+            for i, game in enumerate(scoreboard[:3], 1):
+                home = game.home_team.team_name
+                away = game.away_team.team_name
+                print(f"  Game {i}: {home} vs {away}")
+                
+        except Exception as e:
+            print(f"❌ Error getting scoreboard: {e}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ ESPN connection failed: {e}")
+        return False
+
+def check_logo_system():
+    """Check logo discovery system"""
+    print("\n=== Logo System Check ===")
+    
+    # Check logo directories
+    logo_dirs = [
+        'logos',
+        'logos/generated_logos',
+        'logos/ai',
+        'assets/logos'
+    ]
+    
+    total_logos = 0
+    for logo_dir in logo_dirs:
+        path = Path(logo_dir)
+        if path.exists():
+            files = list(path.glob('*.*'))
+            total_logos += len(files)
