@@ -95,35 +95,72 @@ def get_team_logo_path(team_name: str) -> str:
 
 # Add this function to your build_gazette.py after the existing logo functions
 
+# Replace your find_or_create_logo function with this safer version:
+
 def find_or_create_logo(logo_path, fallback_name):
-    """Find an existing logo or create a placeholder"""
+    """Find an existing logo or skip if not found"""
     if not logo_path:
         return None
         
     path = Path(logo_path)
     
-    # If the exact path exists, use it
-    if path.exists():
+    # If the exact path exists and is an image file, use it
+    if path.exists() and path.suffix.lower() in {'.png', '.jpg', '.jpeg', '.webp', '.gif'}:
         return str(path)
     
-    # Try to find similar files in the directory
+    # Try to find similar image files in the directory
     if path.parent.exists():
         stem = path.stem.lower()
         for file in path.parent.glob("*"):
-            if file.is_file() and stem in file.stem.lower():
+            if (file.is_file() and 
+                file.suffix.lower() in {'.png', '.jpg', '.jpeg', '.webp', '.gif'} and
+                stem in file.stem.lower()):
                 print(f"Found similar logo: {file} for {logo_path}")
                 return str(file)
     
-    # Create a simple placeholder
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        placeholder_path = path.with_suffix('.txt')
-        placeholder_path.write_text(f"Placeholder logo for {fallback_name}")
-        print(f"Created placeholder logo: {placeholder_path}")
-        return str(placeholder_path)
-    except Exception as e:
-        print(f"Could not create placeholder for {logo_path}: {e}")
-        return None
+    # Don't create placeholders for league/sponsor logos - just skip them
+    print(f"No image file found for {logo_path} - skipping logo")
+    return None
+
+# Also update your create_image_objects function to handle missing logos better:
+
+def create_image_objects(doc, context):
+    """Convert image paths to InlineImage objects"""
+    image_context = {}
+    
+    for key, value in context.items():
+        if key.endswith('_LOGO_PATH') and value and Path(value).exists():
+            # Convert path to InlineImage object
+            logo_key = key.replace('_PATH', '')
+            try:
+                # Check if it's actually an image file
+                if Path(value).suffix.lower() in {'.png', '.jpg', '.jpeg', '.webp', '.gif'}:
+                    image_context[logo_key] = InlineImage(doc, value, width=Mm(25))
+                    print(f"✅ Loaded image for {logo_key}: {value}")
+                else:
+                    print(f"⚠️  Skipping non-image file for {logo_key}: {value}")
+                    # Don't add the logo - template will show placeholder or nothing
+            except Exception as e:
+                print(f"⚠️  Error loading image {value}: {e}")
+                
+        elif key in ['LEAGUE_LOGO', 'SPONSOR_LOGO']:
+            # Handle league and sponsor logos
+            if isinstance(value, str) and Path(value).exists():
+                try:
+                    # Check if it's actually an image file
+                    if Path(value).suffix.lower() in {'.png', '.jpg', '.jpeg', '.webp', '.gif'}:
+                        # Resize sponsor logo to be smaller (you said it was too big)
+                        width = Mm(20) if key == 'SPONSOR_LOGO' else Mm(30)
+                        image_context[key] = InlineImage(doc, value, width=width)
+                        print(f"✅ Loaded {key}: {value} (width: {width})")
+                    else:
+                        print(f"⚠️  Skipping non-image file for {key}: {value}")
+                except Exception as e:
+                    print(f"⚠️  Error loading {key}: {e}")
+        else:
+            image_context[key] = value
+    
+    return image_context
 
 # Then in your main() function, replace the league/sponsor logo section with:
 

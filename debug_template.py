@@ -33,7 +33,7 @@ from gazette_data import build_context, fetch_week_from_espn
 LOGO_DIRS = [
     "logos/ai",
     "logos/generated_logos",
-    "logos/generated_logo",
+    "logos/team_logos",
     "logos",
 ]
 

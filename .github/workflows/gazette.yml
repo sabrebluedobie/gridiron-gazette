@@ -112,7 +112,33 @@ jobs:
               print(f'❌ ESPN connection failed: {e}')
               raise
           "
+      - name: Create required logo files
+        run: |
+          mkdir -p logos/team_logos
+          
+          # Download your sponsor logo from the image you provided
+          # Create the league logo file (copy your actual image file)
+          python3 -c "
+          from pathlib import Path
+          
+          # For now, create proper image file extensions but point to existing files
+          # You'll need to upload your actual image files to the repo
 
+          league_logo_path = Path('logos/team_logos/BrownSEA-KC.png')
+          sponsor_logo_path = Path('logos/team_logos/gazette_logo.png')
+
+          # Check if actual image files exist, if not skip logos for now
+          league_logo_exists = league_logo_path.exists()
+          sponsor_logo_exists = sponsor_logo_path.exists()
+          
+          print(f'League logo exists: {league_logo_exists}')
+          print(f'Sponsor logo exists: {sponsor_logo_exists}')
+          
+          if not league_logo_exists:
+              print('League logo file not found - will skip league logo')
+          if not sponsor_logo_exists:
+              print('Sponsor logo file not found - will skip sponsor logo') 
+          "
       - name: Build gazette
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
