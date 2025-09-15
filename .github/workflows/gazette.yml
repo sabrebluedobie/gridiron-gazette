@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip "setuptools<81" wheel
           pip install -r requirements.txt
@@ -32,50 +32,46 @@ jobs:
           SWID: ${{ secrets.SWID }}
         run: |
           echo "Python version: $(python --version)"
-          echo "pip list:"
-          pip list | grep -E "(espn|openai|docx|pillow)"
-          echo "Files present:"
-          ls -la *.py *.json 2>/dev/null || echo "Some files missing"
+          echo "Current directory: $(pwd)"
+          echo "Files in repo:"
+          ls -la
           echo "ESPN_S2 set: $([[ -n "$ESPN_S2" ]] && echo 'yes' || echo 'no')"
           echo "SWID set: $([[ -n "$SWID" ]] && echo 'yes' || echo 'no')"
           echo "OPENAI_API_KEY set: $([[ -n "$OPENAI_API_KEY" ]] && echo 'yes' || echo 'no')"
 
-      - name: Generate placeholder logos
+      - name: Create output directories
         run: |
-          python -c "
+          mkdir -p recaps
+          mkdir -p artifacts
+          echo "Created directories:"
+          ls -la recaps/ artifacts/
+
+      - name: Generate basic team logos for testing
+        run: |
+          mkdir -p logos/generated_logos
+          python3 -c "
           import json
           from pathlib import Path
-          import hashlib
           import re
           
-          # Create simple text-based logos for testing
+          # Create basic placeholder logos
           logos_dir = Path('logos/generated_logos')
-          logos_dir.mkdir(parents=True, exist_ok=True)
+          team_logos = {}
           
-          # Get team names from leagues.json
-          try:
-              leagues = json.loads(Path('leagues.json').read_text())
-              config = leagues[0]
-              
-              # Create a simple mapping
-              team_logos = {}
-              test_teams = ['Storm', 'Wafflers', 'Eagles', 'Panthers', 'Hawks', 'Thunder', 'Rebels', 'Titans', 'Crushers', 'Lightning']
-              
-              for team in test_teams:
-                  safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', team)
-                  logo_path = logos_dir / f'{safe_name}.png'
-                  
-                  # Create a minimal placeholder file
-                  logo_path.write_text(f'Placeholder for {team}')
-                  team_logos[team] = str(logo_path)
-                  print(f'Created placeholder for {team}')
-              
-              # Save mapping
-              Path('team_logos.json').write_text(json.dumps(team_logos, indent=2))
-              print(f'Saved {len(team_logos)} team logo mappings')
-              
-          except Exception as e:
-              print(f'Error creating logos: {e}')
+          # Sample team names for testing
+          teams = ['Storm', 'Wafflers', 'Eagles', 'Panthers', 'Hawks', 'Thunder', 'Rebels', 'Titans']
+          
+          for team in teams:
+              safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', team)
+              logo_file = logos_dir / f'{safe_name}.txt'
+              logo_file.write_text(f'Logo placeholder for {team}')
+              team_logos[team] = str(logo_file)
+          
+          # Save the mapping
+          with open('team_logos.json', 'w') as f:
+              json.dump(team_logos, f, indent=2)
+          
+          print(f'Created {len(team_logos)} placeholder logos')
           "
 
       - name: Test ESPN connection
@@ -83,16 +79,16 @@ jobs:
           ESPN_S2: ${{ secrets.ESPN_S2 }}
           SWID: ${{ secrets.SWID }}
         run: |
-          python -c "
-          import json
+          python3 -c "
           import os
+          import json
           from pathlib import Path
           
           try:
               from espn_api.football import League
               
-              leagues = json.loads(Path('leagues.json').read_text())
-              config = leagues[0]
+              with open('leagues.json') as f:
+                  config = json.load(f)[0]
               
               league = League(
                   league_id=config['league_id'],
@@ -101,19 +97,20 @@ jobs:
                   swid=os.getenv('SWID')
               )
               
-              print(f'Connected to league: {league.settings.name}')
+              print(f'✅ Connected to: {league.settings.name}')
               print(f'Teams: {len(league.teams)}')
-              for team in league.teams:
-                  print(f'  - {team.team_name}')
               
-              # Test getting week 1 data
-              scoreboard = league.scoreboard(week=1)
-              print(f'Week 1 games: {len(scoreboard)}')
+              # Test getting week data
+              try:
+                  week = int('${{ github.event.inputs.week }}' or '1')
+                  scoreboard = league.scoreboard(week=week)
+                  print(f'✅ Found {len(scoreboard)} games for week {week}')
+              except Exception as e:
+                  print(f'⚠️  Could not get week data: {e}')
               
           except Exception as e:
-              print(f'ESPN test failed: {e}')
-              import traceback
-              traceback.print_exc()
+              print(f'❌ ESPN connection failed: {e}')
+              raise
           "
 
       - name: Build gazette
@@ -122,15 +119,76 @@ jobs:
           ESPN_S2: ${{ secrets.ESPN_S2 }}
           SWID: ${{ secrets.SWID }}
         run: |
-          mkdir -p recaps
+          # Set the week number
+          WEEK_NUM="${{ github.event.inputs.week }}"
+          if [ -z "$WEEK_NUM" ]; then
+            WEEK_NUM="1"
+          fi
+          
+          # Define output paths
+          OUTPUT_DIR="recaps"
+          OUTPUT_FILE="$OUTPUT_DIR/gazette_week_${WEEK_NUM}.docx"
+          ARTIFACT_FILE="artifacts/gazette_week_${WEEK_NUM}.docx"
+          
+          echo "Building gazette for week $WEEK_NUM"
+          echo "Output file: $OUTPUT_FILE"
+          
+          # Run the build
           python build_gazette.py \
             --template "${{ vars.TEMPLATE || 'recap_template.docx' }}" \
-            --out-docx "${{ vars.OUTDOCX || 'recaps/gazette.docx' }}" \
+            --out-docx "$OUTPUT_FILE" \
             --league-id "${{ vars.LEAGUE_ID || '887998' }}" \
             --year "${{ vars.YEAR || '2025' }}" \
-            --week "${{ github.event.inputs.week || '1' }}" \
+            --week "$WEEK_NUM" \
             --llm-blurbs \
             --blurb-style mascot \
             --blurb-words 500 \
             --temperature 0.4 \
             --slots 10
+          
+          # Check if file was created
+          if [ -f "$OUTPUT_FILE" ]; then
+            echo "✅ Gazette created successfully: $OUTPUT_FILE"
+            ls -la "$OUTPUT_FILE"
+            
+            # Copy to artifacts directory for upload
+            cp "$OUTPUT_FILE" "$ARTIFACT_FILE"
+            echo "✅ Copied to artifacts: $ARTIFACT_FILE"
+          else
+            echo "❌ Gazette file was not created!"
+            echo "Contents of output directory:"
+            ls -la "$OUTPUT_DIR/" || echo "Output directory does not exist"
+            exit 1
+          fi
+
+      - name: List all created files
+        run: |
+          echo "=== All files in workspace ==="
+          find . -name "*.docx" -o -name "*.pdf" | head -20
+          echo ""
+          echo "=== Contents of recaps/ ==="
+          ls -la recaps/ || echo "recaps/ directory not found"
+          echo ""
+          echo "=== Contents of artifacts/ ==="
+          ls -la artifacts/ || echo "artifacts/ directory not found"
+
+      - name: Upload gazette as artifact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: gazette-week-${{ github.event.inputs.week || '1' }}
+          path: |
+            recaps/*.docx
+            artifacts/*.docx
+          retention-days: 30
+
+      - name: Upload additional files as artifact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: gazette-extras-week-${{ github.event.inputs.week || '1' }}
+          path: |
+            team_logos.json
+            logos/generated_logos/*
+          retention-days: 7
+          if-no-files-found: ignore
