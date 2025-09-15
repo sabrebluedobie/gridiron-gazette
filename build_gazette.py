@@ -94,7 +94,7 @@ def get_team_logo_path(team_name: str) -> str:
     return "logos/team_logos/default_team_logo.png"
 
 
-def _espn_data(league_id, year, espn_s2, swid, week_number):
+def fetch_espn_data(league_id, year, espn_s2, swid, week_number):
     """Fetch data from ESPN Fantasy API with better error handling"""
     print(f"Connecting to ESPN league {league_id} for week {week_number}")
     
@@ -160,6 +160,60 @@ def _espn_data(league_id, year, espn_s2, swid, week_number):
             except Exception as e:
                 print(f"Error processing matchup {i}: {e}")
                 continue
+
+                    # ---- Stats Spotlight from box scores ----
+        try:
+            box_scores = league.box_scores(week=week_number)
+            # Build a quick index by (home_name, away_name) so we can match scoreboard order robustly
+            bs_index = {}
+            for bs in box_scores:
+                h = getattr(bs.home_team, "team_name", "Unknown")
+                a = getattr(bs.away_team, "team_name", "Unknown")
+                bs_index[(h, a)] = bs
+
+            for i in range(1, 11):
+                home = matchup_data.get(f'MATCHUP{i}_HOME')
+                away = matchup_data.get(f'MATCHUP{i}_AWAY')
+                if not home or not away:
+                    continue
+                bs = bs_index.get((home, away)) or bs_index.get((away, home))
+                if not bs:
+                    continue
+
+                # lineups: lists of BoxPlayer with .name, .points, .projected_points, .slot_position, .position
+                home_lineup = getattr(bs, "home_lineup", []) if getattr(bs, "home_team", None) and getattr(bs.home_team, "team_name", None) == home else getattr(bs, "away_lineup", [])
+                away_lineup = getattr(bs, "away_lineup", []) if getattr(bs, "away_team", None) and getattr(bs.away_team, "team_name", None) == away else getattr(bs, "home_lineup", [])
+
+                top_h = _best_player(home_lineup)
+                top_a = _best_player(away_lineup)
+                bust = _bust_player((home_lineup or []) + (away_lineup or []))
+
+                matchup_data[f'MATCHUP{i}_TOP_HOME'] = f"{getattr(top_h, 'name', '—')} ({_fmt_pts(getattr(top_h, 'points', 0))})" if top_h else "—"
+                matchup_data[f'MATCHUP{i}_TOP_AWAY'] = f"{getattr(top_a, 'name', '—')} ({_fmt_pts(getattr(top_a, 'points', 0))})" if top_a else "—"
+                matchup_data[f'MATCHUP{i}_BUST'] = f"{getattr(bust, 'name', '—')} ({_fmt_pts(getattr(bust, 'points', 0))})" if bust else "—"
+
+                # Key play: lightweight, ties winner's top scorer to result
+                hs = matchup_data.get(f'MATCHUP{i}_HS', 0.0) or 0.0
+                as_ = matchup_data.get(f'MATCHUP{i}_AS', 0.0) or 0.0
+                winner = home if (float(hs) >= float(as_)) else away
+                top_w = top_h if winner == home else top_a
+                if top_w:
+                    matchup_data[f'MATCHUP{i}_KEYPLAY'] = f"{winner} rode {getattr(top_w, 'name', 'their star')}’s {_fmt_pts(getattr(top_w, 'points', 0))} to slam the door."
+                else:
+                    matchup_data[f'MATCHUP{i}_KEYPLAY'] = "Late surge sealed it."
+
+                # Defense note: prefer D/ST mention, else generic
+                dn = _find_dst_note(home_lineup, f"{home}") or _find_dst_note(away_lineup, f"{away}")
+                matchup_data[f'MATCHUP{i}_DEF'] = dn or "Defenses traded blows without a true game-swinger."
+
+                # Also stash starters’ names to ground blurbs
+                matchup_data[f'MATCHUP{i}_HOME_PLAYERS'] = [getattr(p, 'name', '') for p in home_lineup if _is_starter(p)][:18]
+                matchup_data[f'MATCHUP{i}_AWAY_PLAYERS'] = [getattr(p, 'name', '') for p in away_lineup if _is_starter(p)][:18]
+
+        except Exception as e:
+            print(f"⚠️  Box score spotlight unavailable: {e}")
+
+
         
         return matchup_data
         
@@ -167,6 +221,11 @@ def _espn_data(league_id, year, espn_s2, swid, week_number):
         print(f"❌ Error fetching ESPN data: {e}")
         traceback.print_exc()
         raise
+
+def _is_starter(box_player):
+    # ESPN lib typically marks bench/IR with slot_position like 'BE' or 'IR'
+    slot = getattr(box_player, "slot_position", "") or ""
+    return slot not in {"BE", "IR"}
 
 def generate_llm_content(matchup_data, style="mascot", words=500, temperature=0.4):
     """Generate LLM content if requested"""
@@ -187,6 +246,41 @@ def generate_llm_content(matchup_data, style="mascot", words=500, temperature=0.
         return {}
     
     llm_content = {}
+
+def _fmt_pts(x):
+    try:
+        return f"{float(x):.1f}"
+    except Exception:
+        return str(x)
+
+def _best_player(lineup):
+    starters = [p for p in lineup if _is_starter(p)]
+    if not starters:
+        return None
+    return max(starters, key=lambda p: getattr(p, "points", 0.0))
+
+def _bust_player(lineup):
+    starters = [p for p in lineup if _is_starter(p)]
+    if not starters:
+        return None
+    # “Bust” = low actual with at-least-modest projection (>= 8.0)
+    candidates = [p for p in starters if (getattr(p, "projected_points", 0.0) or 0.0) >= 8.0]
+    if not candidates:
+        # fall back to absolute lowest starter
+        candidates = starters
+    return min(candidates, key=lambda p: getattr(p, "points", 0.0))
+
+def _find_dst_note(lineup, team_label):
+    # If a D/ST starter scored well, mention it
+    starters = [p for p in lineup if _is_starter(p)]
+    for p in starters:
+        pos = (getattr(p, "position", "") or "").upper()
+        name = getattr(p, "name", "") or ""
+        pts = getattr(p, "points", 0.0) or 0.0
+        if ("D/ST" in pos or "D/ST" in name.upper()) and pts >= 8.0:
+            return f"{team_label} D/ST chipped in {_fmt_pts(pts)}."
+    return ""
+
     
     # Generate blurbs for each matchup
     for i in range(1, 11):  # Up to 10 matchups
@@ -282,7 +376,7 @@ def main():
     parser.add_argument('--week', type=int, default=1, help='Week number')
     parser.add_argument('--llm-blurbs', action='store_true', help='Generate LLM blurbs')
     parser.add_argument('--blurb-style', default='mascot', help='LLM blurb style')
-    parser.add_argument('--blurb-words', type=int, default=500, help='LLM blurb word count')
+    parser.add_argument('--blurb-words', type=int, default=400, help='LLM blurb word count')
     parser.add_argument('--temperature', type=float, default=0.4, help='LLM temperature')
     parser.add_argument('--slots', type=int, default=10, help='Max matchup slots')
     
@@ -345,78 +439,63 @@ def main():
         }
         
 # ...
-# Add league and sponsor logos if they exist
-if league_config.get('league_logo'):
-    lp = Path(league_config['league_logo'])
-    if lp.exists():
-        context['LEAGUE_LOGO'] = str(lp)
-else:
-    # gentle fallback search
-    candidates = glob("logos/*league*.png") + glob("logos/*league*.jpg") + glob("logos/*league*.jpeg") + glob("logos/*league*.webp")
-    if candidates:
-        context['LEAGUE_LOGO'] = candidates[0]
+        # Add league and sponsor logos if they exist (from leagues.json)
+        if league_config.get('league_logo'):
+            league_logo_path = Path(league_config['league_logo'])
+            if league_logo_path.exists():
+                context['LEAGUE_LOGO'] = str(league_logo_path)
 
-sponsor = league_config.get('sponsor', {})
-if sponsor.get('logo'):
-    sp = Path(sponsor['logo'])
-    if sp.exists():
-        context['SPONSOR_LOGO'] = str(sp)
-else:
-    candidates = glob("logos/*sponsor*.png") + glob("logos/*sponsor*.jpg") + glob("logos/*sponsor*.jpeg") + glob("logos/*sponsor*.webp")
-    if candidates:
-        context['SPONSOR_LOGO'] = candidates[0]
+        sponsor = league_config.get('sponsor', {})
+        if sponsor.get('logo'):
+            sponsor_logo_path = Path(sponsor['logo'])
+            if sponsor_logo_path.exists():
+                context['SPONSOR_LOGO'] = str(sponsor_logo_path)
 
-    # Create output directory if it doesn't exist
-    output_path = Path(args.out_docx)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+        # Create output directory if it doesn't exist
+        output_path = Path(args.out_docx)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Load and render template
-    print(f"Loading template: {args.template}")
-    doc = DocxTemplate(args.template)
+        # Load and render template
+        print(f"Loading template: {args.template}")
+        doc = DocxTemplate(args.template)
 
-    # Convert image paths to InlineImage objects
-    print("Processing images...")
-    context = create_image_objects(doc, context)
+        # Convert image paths to InlineImage objects
+        print("Processing images...")
+        context = create_image_objects(doc, context)
 
-    # Debug: Print context summary
-    print(f"\nContext summary:")
-    print(f"  Total keys: {len(context)}")
-    print(f"  Matchup keys: {len([k for k in context.keys() if 'MATCHUP' in k])}")
-    print(f"  Logo keys: {len([k for k in context.keys() if 'LOGO' in k])}")
+        # Debug
+        print(f"\nContext summary:")
+        print(f"  Total keys: {len(context)}")
+        print(f"  Matchup keys: {len([k for k in context.keys() if 'MATCHUP' in k])}")
+        print(f"  Logo keys: {len([k for k in context.keys() if 'LOGO' in k])}")
 
-    # Check for undeclared template variables
-    try:
-        undeclared = doc.get_undeclared_template_variables(context)
-        if undeclared:
-            print(f"⚠️  Template has undeclared variables: {sorted(undeclared)[:10]}...")
+        # Optional: sanity check undeclared variables
+        try:
+            undeclared = doc.get_undeclared_template_variables(context)
+            if undeclared:
+                print(f"⚠️  Template has undeclared variables: {sorted(undeclared)[:10]}...")
+            else:
+                print("✅ All template variables are declared")
+        except Exception as e:
+            print(f"Could not check template variables: {e}")
+
+        # Render & save
+        print("Rendering template...")
+        doc.render(context)
+        print(f"Saving to: {args.out_docx}")
+        doc.save(args.out_docx)
+
+        if Path(args.out_docx).exists():
+            file_size = Path(args.out_docx).stat().st_size
+            print(f"✅ Gazette saved successfully!  ({file_size:,} bytes)")
         else:
-            print("✅ All template variables are declared")
-    except Exception as e:
-        print(f"Could not check template variables: {e}")
+            raise RuntimeError("File was not created!")
 
-    # Render template
-    print("Rendering template...")
-    doc.render(context)
-
-    # Save output
-    print(f"Saving to: {args.out_docx}")
-    doc.save(args.out_docx)
-
-    # Verify file was created
-    if Path(args.out_docx).exists():
-        file_size = Path(args.out_docx).stat().st_size
-        print(f"✅ Gazette saved successfully!")
-        print(f"   File: {args.out_docx}")
-        print(f"   Size: {file_size:,} bytes")
-    else:
-        raise RuntimeError("File was not created!")
-        
-        # End of try block
-    
     except Exception as e:
         print(f"❌ Error building gazette: {e}")
         traceback.print_exc()
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
