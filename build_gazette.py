@@ -21,18 +21,71 @@ def load_league_config():
         leagues = json.load(f)
     return leagues[0]  # Assuming single league for now
 
+from functools import lru_cache
+import re
+from pathlib import Path
+
+def _normalize_name(s: str) -> str:
+    """
+    Normalize team names and filenames for matching:
+    - lowercase
+    - strip non-alphanumerics
+    - collapse spaces
+    """
+    s = s.lower()
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+@lru_cache(maxsize=1)
+def _build_logo_index(root="logos/team_logos"):
+    """
+    Scan logos/team_logos and build a map of normalized_name -> file path.
+    Supports png/jpg/jpeg/webp.
+    """
+    root_path = Path(root)
+    exts = {".png", ".jpg", ".jpeg", ".webp"}
+    index = {}
+    if root_path.exists():
+        for p in root_path.rglob("*"):
+            if p.is_file() and p.suffix.lower() in exts:
+                key = _normalize_name(p.stem)
+                index[key] = str(p)
+    return index
+
 def get_team_logo_path(team_name):
-    """Map team names to logo file paths"""
-    # This is a basic mapping - you'll need to expand based on your team names
-    # and available logo files
-    logo_map = {
-        # Add your team name to logo file mappings here
-        # Example:
-        # "Team Name": "logos/team_logos/team_name.png",
-    }
-    
-    # Fallback to a default logo if team-specific logo not found
-    return logo_map.get(team_name, "logos/default_team_logo.png")
+    """
+    Fuzzy match an ESPN team name to a file in logos/team_logos/.
+    Falls back to a default only if nothing matches.
+    """
+    index = _build_logo_index()
+    if not team_name:
+        return "logos/default_team_logo.png"
+
+    norm = _normalize_name(team_name)
+
+    # Direct match
+    if norm in index:
+        return index[norm]
+
+    # Try without trailing 's' (e.g., "pumas" -> "puma")
+    if norm.endswith("s") and norm[:-1] in index:
+        return index[norm[:-1]]
+
+    # Try progressively removing short tokens
+    parts = norm.split()
+    while len(parts) > 1:
+        parts.pop()  # drop last token
+        candidate = " ".join(parts)
+        if candidate in index:
+            return index[candidate]
+
+    # Last resort: startswith/contains style scan
+    for k, v in index.items():
+        if norm in k or k in norm:
+            return v
+
+    return "logos/default_team_logo.png"
 
 def fetch_espn_data(league_id, year, espn_s2, swid, week_number):
     """Fetch data from ESPN Fantasy API"""
@@ -177,6 +230,7 @@ def main():
         'LEAGUE_LOGO': league_config.get('league_logo'),
         'SPONSOR_LOGO': league_config.get('sponsor', {}).get('logo'),
         'FOOTER_NOTE': league_config.get('sponsor', {}).get('line', 'Fantasy Football Gazette'),
+        'SPONSOR_LINE': league_config.get('sponsor', {}).get('line', 'Your Sponsor Here'),
         **espn_data,
         **llm_content
     }
