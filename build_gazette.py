@@ -191,13 +191,99 @@ def fetch_espn_data(league_id, year, espn_s2, swid, week_number):
         # Get matchups for the specified week
         matchups = league.scoreboard(week=week_number)
         print(f"Found {len(matchups)} matchups for week {week_number}")
+        
+        # Initialize matchup_data FIRST
+        matchup_data = {}
+        
+        # Process matchups into template format
+        for i, matchup in enumerate(matchups[:10], 1):  # Limit to 10 matchups
+            try:
+                home_team = matchup.home_team
+                away_team = matchup.away_team
+                
+                home_name = home_team.team_name if home_team else "Unknown"
+                away_name = away_team.team_name if away_team else "Unknown"
+                home_score = getattr(matchup, 'home_score', 0) or 0
+                away_score = getattr(matchup, 'away_score', 0) or 0
+                
+                print(f"  Game {i}: {home_name} ({home_score}) vs {away_name} ({away_score})")
+                
+                matchup_data.update({
+                    f'MATCHUP{i}_HOME': home_name,
+                    f'MATCHUP{i}_AWAY': away_name,
+                    f'MATCHUP{i}_HS': home_score,
+                    f'MATCHUP{i}_AS': away_score,
+                })
+                
+                # Add logos
+                home_logo = get_team_logo_path(home_name)
+                away_logo = get_team_logo_path(away_name)
+                
+                if home_logo:
+                    matchup_data[f'MATCHUP{i}_HOME_LOGO_PATH'] = home_logo
+                    print(f"    Found logo for {home_name}: {home_logo}")
+                
+                if away_logo:
+                    matchup_data[f'MATCHUP{i}_AWAY_LOGO_PATH'] = away_logo
+                    print(f"    Found logo for {away_name}: {away_logo}")
+                
+            except Exception as e:
+                print(f"Error processing matchup {i}: {e}")
+                continue
 
+        # Now process box scores (after matchup_data is created)
+        try:
+            box_scores = league.box_scores(week=week_number)
+            bs_index = {}
+            for bs in box_scores:
+                h = getattr(bs.home_team, "team_name", "Unknown")
+                a = getattr(bs.away_team, "team_name", "Unknown")
+                bs_index[(h, a)] = bs
+
+            for i in range(1, 11):
+                home = matchup_data.get(f'MATCHUP{i}_HOME')
+                away = matchup_data.get(f'MATCHUP{i}_AWAY')
+                if not home or not away:
+                    continue
+                bs = bs_index.get((home, away)) or bs_index.get((away, home))
+                if not bs:
+                    continue
+
+                home_lineup = getattr(bs, "home_lineup", []) if getattr(bs, "home_team", None) and getattr(bs.home_team, "team_name", None) == home else getattr(bs, "away_lineup", [])
+                away_lineup = getattr(bs, "away_lineup", []) if getattr(bs, "away_team", None) and getattr(bs.away_team, "team_name", None) == away else getattr(bs, "home_lineup", [])
+
+                top_h = _best_player(home_lineup)
+                top_a = _best_player(away_lineup)
+                bust = _bust_player((home_lineup or []) + (away_lineup or []))
+
+                matchup_data[f'MATCHUP{i}_TOP_HOME'] = f"{getattr(top_h, 'name', '—')} ({_fmt_pts(getattr(top_h, 'points', 0))})" if top_h else "—"
+                matchup_data[f'MATCHUP{i}_TOP_AWAY'] = f"{getattr(top_a, 'name', '—')} ({_fmt_pts(getattr(top_a, 'points', 0))})" if top_a else "—"
+                matchup_data[f'MATCHUP{i}_BUST'] = f"{getattr(bust, 'name', '—')} ({_fmt_pts(getattr(bust, 'points', 0))})" if bust else "—"
+
+                hs = matchup_data.get(f'MATCHUP{i}_HS', 0.0) or 0.0
+                as_ = matchup_data.get(f'MATCHUP{i}_AS', 0.0) or 0.0
+                winner = home if (float(hs) >= float(as_)) else away
+                top_w = top_h if winner == home else top_a
+                matchup_data[f'MATCHUP{i}_KEYPLAY'] = (
+                    f"{winner} rode {getattr(top_w, 'name', 'their star')}'s {_fmt_pts(getattr(top_w, 'points', 0))} to slam the door."
+                    if top_w else "Late surge sealed it."
+                )
+
+                dn = _find_dst_note(home_lineup, f"{home}") or _find_dst_note(away_lineup, f"{away}")
+                matchup_data[f'MATCHUP{i}_DEF'] = dn or "Defenses traded blows without a true game-swinger."
+
+                matchup_data[f'MATCHUP{i}_HOME_PLAYERS'] = [getattr(p, 'name', '') for p in home_lineup if _is_starter(p)][:18]
+                matchup_data[f'MATCHUP{i}_AWAY_PLAYERS'] = [getattr(p, 'name', '') for p in away_lineup if _is_starter(p)][:18]
+
+        except Exception as e:
+            print(f"⚠️  Box score spotlight unavailable: {e}")
+
+        return matchup_data
+        
     except Exception as e:
-        print(f"Error importing or connecting to ESPN API: {e}")
+        print(f"❌ Error fetching ESPN data: {e}")
         traceback.print_exc()
         raise
-
-    # Add this function after your other helper functions in build_gazette.py
 
 def calculate_awards(matchup_data):
     """Calculate weekly awards from matchup data"""
@@ -271,11 +357,35 @@ def calculate_awards(matchup_data):
     return awards
 
 # Then in your main() function, after you fetch ESPN data but before building the context, add this:
+# Fetch ESPN data
+espn_data = fetch_espn_data(
+    league_id=int(args.league_id),
+    year=args.year,
+    espn_s2=espn_creds['espn_s2'],
+    swid=espn_creds['swid'],
+    week_number=args.week
+)
+
+if not espn_data:
+    raise RuntimeError(f"No ESPN data found for week {args.week}")
 
 # Calculate awards
 awards = calculate_awards(espn_data)
 
-# Then update your context building to include the awards:
+# Generate LLM content if requested
+llm_content = {}
+if args.llm_blurbs:
+    llm_content = generate_llm_content(
+        espn_data, 
+        style=args.blurb_style, 
+        words=args.blurb_words,
+        temperature=args.temperature
+    )
+
+# Build template context
+espn_data = espn_data or {}
+llm_content = llm_content or {}
+
 context = {
     'title': league_config.get('name', 'Fantasy Football Gazette'),
     'WEEK_NUMBER': args.week,
@@ -284,63 +394,63 @@ context = {
     'SPONSOR_LINE': league_config.get('sponsor', {}).get('line', 'Your weekly fantasy fix.'),
     **espn_data,
     **llm_content,
-    **awards  # Add this line to include the awards
+    **awards  # Add the awards here
 }
 
-        # ---- Stats Spotlight from box scores ----
-box_scores = league.box_scores(week=week_number)
-        # Build a quick index by (home_name, away_name) so we can match scoreboard order robustly
-bs_index = {}
-for bs in box_scores:
-            h = getattr(bs.home_team, "team_name", "Unknown")
-            a = getattr(bs.away_team, "team_name", "Unknown")
-            bs_index[(h, a)] = bs
-    
-        for i in range(1, 11):
-            home = matchup_data.get(f'MATCHUP{i}_HOME')
-            away = matchup_data.get(f'MATCHUP{i}_AWAY')
-            if not home or not away:
-                continue
-            bs = bs_index.get((home, away)) or bs_index.get((away, home))
-            if not bs:
-                continue
-    
-            # lineups: lists of BoxPlayer with .name, .points, .projected_points, .slot_position, .position
-            home_lineup = getattr(bs, "home_lineup", []) if getattr(bs, "home_team", None) and getattr(bs.home_team, "team_name", None) == home else getattr(bs, "away_lineup", [])
-            away_lineup = getattr(bs, "away_lineup", []) if getattr(bs, "away_team", None) and getattr(bs.away_team, "team_name", None) == away else getattr(bs, "home_lineup", [])
-    
-            top_h = _best_player(home_lineup)
-            top_a = _best_player(away_lineup)
-            bust = _bust_player((home_lineup or []) + (away_lineup or []))
-    
-            matchup_data[f'MATCHUP{i}_TOP_HOME'] = f"{getattr(top_h, 'name', '—')} ({_fmt_pts(getattr(top_h, 'points', 0))})" if top_h else "—"
-            matchup_data[f'MATCHUP{i}_TOP_AWAY'] = f"{getattr(top_a, 'name', '—')} ({_fmt_pts(getattr(top_a, 'points', 0))})" if top_a else "—"
-            matchup_data[f'MATCHUP{i}_BUST'] = f"{getattr(bust, 'name', '—')} ({_fmt_pts(getattr(bust, 'points', 0))})" if bust else "—"
-    
-            # Key play: lightweight, ties winner's top scorer to result
-            hs = matchup_data.get(f'MATCHUP{i}_HS', 0.0) or 0.0
-            as_ = matchup_data.get(f'MATCHUP{i}_AS', 0.0) or 0.0
-            winner = home if (float(hs) >= float(as_)) else away
-            top_w = top_h if winner == home else top_a
-            if top_w:
-                matchup_data[f'MATCHUP{i}_KEYPLAY'] = f"{winner} rode {getattr(top_w, 'name', 'their star')}’s {_fmt_pts(getattr(top_w, 'points', 0))} to slam the door."
-            else:
-                matchup_data[f'MATCHUP{i}_KEYPLAY'] = "Late surge sealed it."
-    
-            # Defense note: prefer D/ST mention, else generic
-            dn = _find_dst_note(home_lineup, f"{home}") or _find_dst_note(away_lineup, f"{away}")
-            matchup_data[f'MATCHUP{i}_DEF'] = dn or "Defenses traded blows without a true game-swinger."
-    
-            # Also stash starters’ names to ground blurbs
-            matchup_data[f'MATCHUP{i}_HOME_PLAYERS'] = [getattr(p, 'name', '') for p in home_lineup if _is_starter(p)][:18]
-            matchup_data[f'MATCHUP{i}_AWAY_PLAYERS'] = [getattr(p, 'name', '') for p in away_lineup if _is_starter(p)][:18]
-    
-        return matchup_data
-    
-    except Exception as e:
-        print(f"❌ Error fetching ESPN data: {e}")
-        traceback.print_exc()
-        raise
+    # ---- Stats Spotlight from box scores ----
+    box_scores = league.box_scores(week=week_number)
+    # Build a quick index by (home_name, away_name) so we can match scoreboard order robustly
+    bs_index = {}
+    for bs in box_scores:
+        h = getattr(bs.home_team, "team_name", "Unknown")
+        a = getattr(bs.away_team, "team_name", "Unknown")
+        bs_index[(h, a)] = bs
+
+    for i in range(1, 11):
+        home = matchup_data.get(f'MATCHUP{i}_HOME')
+        away = matchup_data.get(f'MATCHUP{i}_AWAY')
+        if not home or not away:
+            continue
+        bs = bs_index.get((home, away)) or bs_index.get((away, home))
+        if not bs:
+            continue
+
+        # lineups: lists of BoxPlayer with .name, .points, .projected_points, .slot_position, .position
+        home_lineup = getattr(bs, "home_lineup", []) if getattr(bs, "home_team", None) and getattr(bs.home_team, "team_name", None) == home else getattr(bs, "away_lineup", [])
+        away_lineup = getattr(bs, "away_lineup", []) if getattr(bs, "away_team", None) and getattr(bs.away_team, "team_name", None) == away else getattr(bs, "home_lineup", [])
+
+        top_h = _best_player(home_lineup)
+        top_a = _best_player(away_lineup)
+        bust = _bust_player((home_lineup or []) + (away_lineup or []))
+
+        matchup_data[f'MATCHUP{i}_TOP_HOME'] = f"{getattr(top_h, 'name', '—')} ({_fmt_pts(getattr(top_h, 'points', 0))})" if top_h else "—"
+        matchup_data[f'MATCHUP{i}_TOP_AWAY'] = f"{getattr(top_a, 'name', '—')} ({_fmt_pts(getattr(top_a, 'points', 0))})" if top_a else "—"
+        matchup_data[f'MATCHUP{i}_BUST'] = f"{getattr(bust, 'name', '—')} ({_fmt_pts(getattr(bust, 'points', 0))})" if bust else "—"
+
+        # Key play: lightweight, ties winner's top scorer to result
+        hs = matchup_data.get(f'MATCHUP{i}_HS', 0.0) or 0.0
+        as_ = matchup_data.get(f'MATCHUP{i}_AS', 0.0) or 0.0
+        winner = home if (float(hs) >= float(as_)) else away
+        top_w = top_h if winner == home else top_a
+        if top_w:
+            matchup_data[f'MATCHUP{i}_KEYPLAY'] = f"{winner} rode {getattr(top_w, 'name', 'their star')}’s {_fmt_pts(getattr(top_w, 'points', 0))} to slam the door."
+        else:
+            matchup_data[f'MATCHUP{i}_KEYPLAY'] = "Late surge sealed it."
+
+        # Defense note: prefer D/ST mention, else generic
+        dn = _find_dst_note(home_lineup, f"{home}") or _find_dst_note(away_lineup, f"{away}")
+        matchup_data[f'MATCHUP{i}_DEF'] = dn or "Defenses traded blows without a true game-swinger."
+
+        # Also stash starters’ names to ground blurbs
+        matchup_data[f'MATCHUP{i}_HOME_PLAYERS'] = [getattr(p, 'name', '') for p in home_lineup if _is_starter(p)][:18]
+        matchup_data[f'MATCHUP{i}_AWAY_PLAYERS'] = [getattr(p, 'name', '') for p in away_lineup if _is_starter(p)][:18]
+
+    return matchup_data
+
+except Exception as e:
+    print(f"❌ Error fetching ESPN data: {e}")
+    traceback.print_exc()
+    raise
 
 def _is_starter(box_player):
     slot = getattr(box_player, "slot_position", "") or ""
@@ -570,7 +680,7 @@ def main():
         # Build template context
         espn_data = espn_data or {}
         llm_content = llm_content or {}
-
+    
         context = {
             'title': league_config.get('name', 'Fantasy Football Gazette'),
             'WEEK_NUMBER': args.week,
