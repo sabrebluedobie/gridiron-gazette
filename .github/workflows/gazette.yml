@@ -167,8 +167,8 @@ jobs:
             --year "${{ vars.YEAR || '2025' }}" \
             --week "$WEEK_NUM" \
             --llm-blurbs \
-            --blurb-style mascot \
-            --blurb-words 500 \
+            --blurb-style sabre \
+            --blurb-words 300 \
             --temperature 0.4 \
             --slots 10
           
