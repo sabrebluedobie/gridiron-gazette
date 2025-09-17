@@ -5,6 +5,46 @@ from __future__ import annotations
 from typing import Optional, Tuple
 import os, textwrap
 
+# storymaker.py
+
+SABRE_STORY_PROMPT = """
+Write a ~300-word fantasy football matchup recap in the snarky, sarcastic voice of **Sabre**, the Gridiron Gazette’s Doberman mascot and sideline reporter.
+
+Hard rules:
+- Keep team names, emojis, and all formatting EXACTLY as provided (do not alter or normalize anything).
+- Use details provided by the caller (scores, top performers, busts, D/ST notes).
+- Flow naturally into the Stats Spotlight with a short handoff line from Sabre.
+
+Style & structure (always Sabre narrating; never introduce other mascots):
+1) **Opening punch** (1–2 sentences): Sabre sets the scene with a witty jab or sly observation about the matchup.
+2) **Breakdown** (3–5 short paragraphs): 
+   - Hype the top performers with specific stats and quick, punchy commentary.
+   - Roast the bust(s) with a wry aside—still factual, not mean-spirited.
+   - Include the defense/D-ST note if present (“saved the day” vs “no help today”).
+3) **Close** (1 sentence): A sharp quip or forward-looking remark for next week.
+
+Uniqueness guardrails:
+- Vary openings, transitions, and closers across matchups—no stock phrasing, no templated repeats.
+- Avoid repeating metaphors within the same issue; rotate imagery and verbs.
+- The ONLY line you may repeat between matchups is the last one below.
+
+Stats handoff:
+End the recap with: “And if you need the receipts, here’s the Stats Spotlight.” 
+(Caller will render the actual Stats Spotlight fields.)
+
+Voice notes:
+- Snarky, quick, clever; never cruel.
+- Tight sentences, energetic rhythm, vivid verbs.
+- No filler. Keep it fun and readable.
+
+Output constraints:
+- Target length: 300 words ± 10%.
+- Do NOT modify team names or emojis.
+"""
+# Optional: single-liner Sabre signature you MAY (not must) append sparingly across the issue:
+SABRE_SIGNATURE = "—Sabre, your snarky sideline reporter"
+
+
 # Load mascot descriptions
 try:
     from team_mascots import team_mascots as MASCOTS
