@@ -622,6 +622,35 @@ def main():
         traceback.print_exc()
         sys.exit(1)
 
+    # build_gazette.py (excerpt)
+from scripts.pdf_export import docx_to_pdf_a
+from scripts.lock_pdf import lock_pdf
+from scripts.flatten_pdf import flatten_pdf
+from pathlib import Path
+import os
+
+PDF_MODE = os.environ.get("PDF_MODE", "flatten")  # flatten | lock | none
+
+def finalize_pdf(docx_path: str, league_slug: str, season: str, week: str) -> str:
+    # 1) Export to PDF/A (fonts embedded)
+    pdf_a = docx_to_pdf_a(docx_path, "out_pdf")
+
+    # 2) Harden
+    out_dir = Path(f"out_pdf_final/{season}/week-{week:>02}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    final_pdf = out_dir / f"{league_slug}.pdf"
+
+    if PDF_MODE == "flatten":
+        flatten_pdf(pdf_a, str(final_pdf), dpi=200)
+    elif PDF_MODE == "lock":
+        lock_pdf(pdf_a, str(final_pdf))
+    else:
+        # no hardening, just move the embedded PDF/A
+        Path(pdf_a).rename(final_pdf)
+
+    return str(final_pdf)
+
+
 if __name__ == "__main__":
     main()
 
