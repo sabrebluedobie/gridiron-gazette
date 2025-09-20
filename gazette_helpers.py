@@ -2,6 +2,52 @@
 
 from docxtpl import DocxTemplate
 from typing import Dict, Any, List
+# gazette_helpers.py
+import json, re
+from pathlib import Path
+
+BASE_DIR = Path(".")                        # project root
+LOGO_DIR = BASE_DIR / "logos" / "team_logos"
+
+def _slug(s: str) -> str:
+    s = s.lower().replace("’", "'")         # normalize curly apostrophe
+    s = s.replace("'", "")                  # drop apostrophes
+    s = re.sub(r"\s+", "_", s)              # spaces -> underscore
+    s = re.sub(r"[^a-z0-9_]", "", s)        # strip emoji/punct
+    return s
+
+def find_logo_for(team_name: str) -> str:
+    """Return a root-relative path to a team logo; never 'logos/logos/...'.
+       Falls back to default if not found."""
+    map_path = BASE_DIR / "team_logos.json"
+    mapping = {}
+    if map_path.exists():
+        mapping = json.loads(map_path.read_text(encoding="utf-8"))
+
+    # 1) Direct mapping lookup (root-relative path like 'logos/team_logos/...').
+    rel = mapping.get(team_name)
+    if rel:
+        p = BASE_DIR / rel
+        if p.exists():
+            return str(p.as_posix())
+
+    # 2) Try slugged-key match (if incoming name differs in punctuation/case).
+    slug = _slug(team_name)
+    for k, v in mapping.items():
+        if _slug(k) == slug:
+            p = BASE_DIR / v
+            if p.exists():
+                return str(p.as_posix())
+
+    # 3) Scan the logo folder for a filename whose slug matches.
+    for p in LOGO_DIR.glob("*.*"):
+        if _slug(p.stem) == slug:
+            return str(p.as_posix())
+
+    # 4) Default
+    fallback = LOGO_DIR / "_default.png"
+    print(f"[WARN] Logo not found for {team_name}; using default: {fallback}")
+    return str(fallback.as_posix())
 
 # ---------- Context mapping helpers ----------
 def add_enumerated_matchups(context: Dict[str, Any], max_slots: int) -> None:
