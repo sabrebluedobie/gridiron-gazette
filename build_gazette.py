@@ -364,6 +364,7 @@ def calculate_awards(matchup_data):
     return awards
 
 # --- Sabre prompt import ---
+from gazette_helpers import find_league_logo
 from storymaker import SABRE_STORY_PROMPT, SABRE_SIGNATURE
 
 def generate_llm_content(matchup_data, style="sabre", words=300, temperature=0.4):
@@ -549,6 +550,11 @@ def main():
             **llm_content,
             **awards
         }
+
+        from gazette_helpers import find_league_logo
+        logo_path = find_league_logo(league_config.get('name'))
+        # insert picture using logo_path
+
 
         # Add league and sponsor logos if they exist
         if league_config.get('league_logo'):

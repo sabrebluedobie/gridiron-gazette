@@ -120,3 +120,50 @@ def add_template_synonyms(context: Dict[str, Any], slots: int) -> None:
     context["AWARD_CUPCAKE_NOTE"] = str(low_score.get("points", "")) or ""
     context["AWARD_KITTY_TEAM"] = largest_gap.get("desc", "")
     context["AWARD_KITTY_NOTE"] = str(largest_gap.get("gap", "")) or ""
+
+def _find_from_map(name: str, map_file: str, folder: Path, default_name: str) -> str:
+    """Generic logo lookup by display name, then slug, then filename scan."""
+    mapping = {}
+    mp = BASE_DIR / map_file
+    if mp.exists():
+        mapping = json.loads(mp.read_text(encoding="utf-8"))
+
+    # 1) direct
+    rel = mapping.get(name)
+    if rel and (BASE_DIR/rel).exists():
+        return str((BASE_DIR/rel).as_posix())
+
+    # 2) slugged key match
+    want = _slug(name)
+    for k, v in mapping.items():
+        if _slug(k) == want and (BASE_DIR/v).exists():
+            return str((BASE_DIR/v).as_posix())
+
+    # 3) scan folder for slugged filename
+    for p in folder.glob("*.*"):
+        if _slug(p.stem) == want:
+            return str(p.as_posix())
+
+    # 4) default
+    fallback = folder / default_name
+    print(f"[WARN] Logo not found for {name}; using default: {fallback}")
+    return str(fallback.as_posix())
+
+def find_league_logo(league_name: str) -> str:
+    return _find_from_map(
+        league_name,
+        "league_logos.json",
+        BASE_DIR / "logos" / "league_logos",
+        "_default.png"
+    )
+
+def find_sponsor_logo(sponsor_name: str) -> str:
+    return _find_from_map(
+        sponsor_name,
+        "sponsor_logos.json",
+        BASE_DIR / "logos" / "sponsor_logos",
+        "_default.png"
+    )
+# --- end add ---
+
+
