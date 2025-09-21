@@ -536,6 +536,30 @@ def main():
     print(f"LLM Blurbs: {args.llm_blurbs}")
     print()
 
+def main():
+    parser = argparse.ArgumentParser(description='Build fantasy football gazette')
+    parser.add_argument('--template', required=True, help='Path to Word template')
+    parser.add_argument('--out-docx', required=True, help='Output docx file path')
+    parser.add_argument('--league-id', required=True, help='ESPN League ID')
+    parser.add_argument('--year', type=int, required=True, help='League year')
+    parser.add_argument('--week', type=int, default=1, help='Week number')
+    parser.add_argument('--llm-blurbs', action='store_true', help='Generate LLM blurbs')
+    parser.add_argument('--blurb-style', default='sabre', help='LLM blurb style')
+    parser.add_argument('--blurb-words', type=int, default=300, help='LLM blurb word count')
+    parser.add_argument('--temperature', type=float, default=0.4, help='LLM temperature')
+    parser.add_argument('--slots', type=int, default=10, help='Max matchup slots')
+
+    args = parser.parse_args()
+
+    print(f"=== Building Gridiron Gazette ===")
+    print(f"Template: {args.template}")
+    print(f"Output: {args.out_docx}")
+    print(f"League ID: {args.league_id}")
+    print(f"Year: {args.year}")
+    print(f"Week: {args.week}")
+    print(f"LLM Blurbs: {args.llm_blurbs}")
+    print()
+
     try:
         # Validate template exists
         if not Path(args.template).exists():
@@ -589,15 +613,17 @@ def main():
 
         from images_attach import create_image_objects
 
+        # Load and render template
+        print(f"Loading template: {args.template}")
+        doc = DocxTemplate(args.template)
+
         # build your context = {...} as usual, including HOME_TEAM_NAME / AWAY_TEAM_NAME, etc.
         context = create_image_objects(doc, context)  # ← converts to InlineImage objects safely
         doc.render(context)
 
-
         from gazette_helpers import find_league_logo
         logo_path = find_league_logo(league_config.get('name'))
         # insert picture using logo_path
-
 
         # Add league and sponsor logos if they exist
         if league_config.get('league_logo'):
@@ -623,11 +649,50 @@ def main():
         output_path = Path(args.out_docx)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Load and render template
-        print(f"Loading template: {args.template}")
-        doc = DocxTemplate(args.template)
+        from pathlib import Path
+        from scripts.docx_to_pdf import docx_to_pdf
+        from scripts.pdf_to_pdfa import pdf_to_pdfa
+        # optional, resilient locking (already patched earlier)
+        try:
+            from scripts.lock_pdf import lock_pdf  # falls back to unlocked if pikepdf missing
+        except Exception:
+            lock_pdf = None
+
+        # Define docx_path as the output DOCX file path
+        output_path = Path(args.out_docx)
+        docx_path = output_path
+        doc.save(str(docx_path))
+        # add_footer_gradient(str(docx_path), "./logos/footer_gradient_diagonal.png", bar_height_mm=12.0)
+
+        # 1) DOCX -> PDF
+        pdf_path = docx_to_pdf(str(docx_path))
+
+        # 2) PDF -> PDF/A-2b (write alongside original)
+        pdfa_path = Path(pdf_path).with_suffix(".pdf")  # we’ll place it over the original name in a moment
+        pdfa_tmp = Path(pdf_path).with_suffix(".pdfa.pdf")
+        pdfa_path = pdf_to_pdfa(pdf_path, str(pdfa_tmp))
+
+        # (Optional) 3) Lock the PDF/A; keep unlocked as fallback
+        if lock_pdf:
+            locked_out = Path(pdf_path).with_suffix(".locked.pdf")  # or use .pdf for final
+            try:
+                lock_pdf(pdfa_tmp, str(locked_out))
+                final_pdf = locked_out
+            except Exception as e:
+                print(f"[lock_pdf] failed ({e}); keeping UNLOCKED PDF/A: {pdfa_tmp}")
+                final_pdf = Path(pdfa_tmp)
+        else:
+            final_pdf = Path(pdfa_tmp)
+
+        # Rename final output to the canonical name (overwrite prior simple PDF)
+        final_name = Path(pdf_path)
+        final_name.unlink(missing_ok=True)
+        final_pdf.rename(final_name)
+
+        print(f"[build] PDF/A available at: {final_name}")
 
         from footer_gradient import add_footer_gradient
+
         add_footer_gradient(docx_path="assets/brand/footer_gradient_diagonal.png", bar_height_mm=12.0, output_path=args.out_docx)
 
         # Convert image paths to InlineImage objects
@@ -642,14 +707,11 @@ def main():
         print(f"  Award keys: {len([k for k in context.keys() if 'AWARD' in k])}")
 
         # Optional: sanity check undeclared variables
-        try:
-            undeclared = doc.get_undeclared_template_variables(context)
-            if undeclared:
-                print(f"Template has undeclared variables: {sorted(undeclared)[:10]}...")
-            else:
-                print("All template variables are declared")
-        except Exception as e:
-            print(f"Could not check template variables: {e}")
+        undeclared = doc.get_undeclared_template_variables(context)
+        if undeclared:
+            print(f"Template has undeclared variables: {sorted(undeclared)[:10]}...")
+        else:
+            print("All template variables are declared")
 
         # Render & save
         print("Rendering template...")

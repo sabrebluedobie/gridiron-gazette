@@ -223,3 +223,13 @@ run:
 	  --model $(MODEL) --temperature $(TEMP) $(ARGS)
 endif
 
+recap:
+\tpython3 weekly_recap.py --league-id $(LEAGUE_ID) --year $(YEAR) --week $(WEEK) --llm-blurbs --output-dir recaps
+
+recap-auto:
+\tpython3 weekly_recap.py --league-id $(LEAGUE_ID) --year $(YEAR) --auto-week --week-offset 0 --llm-blurbs --output-dir recaps
+
+recap-multi:
+\tpython3 weekly_recap_multi.py --config leagues.yml --auto-week --llm-blurbs --output-dir recaps
+
+
