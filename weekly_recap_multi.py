@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-# weekly_recap_multi.py — run many leagues from a YAML file
-import argparse, sys, logging, subprocess, shlex, time, datetime as dt, json
+# weekly_recap_multi.py — run multiple leagues from leagues.yml
+import argparse, sys, subprocess, shlex, time, datetime as dt, json
 from pathlib import Path
-
 import yaml  # pip install pyyaml
 
 def parse_args():
@@ -19,8 +18,8 @@ def parse_args():
 
 def compute_auto_week(offset=0) -> int:
     today = dt.date.today()
-    week_num = int(today.strftime("%U"))
-    return max(1, week_num + offset)
+    wk = int(today.strftime("%U"))
+    return max(1, wk + offset)
 
 def run_one(league_id, year, week, llm, outdir, verbose):
     cmd = [sys.executable, "build_gazette.py",
@@ -32,14 +31,13 @@ def run_one(league_id, year, week, llm, outdir, verbose):
 
 def main():
     args = parse_args()
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(message)s")
     data = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
     leagues = data.get("leagues", [])
     if not leagues:
         print("[multi] No leagues found in config.")
         sys.exit(2)
 
-    week = args.week if args.week else compute_auto_week(args.week_offset)
+    week = args.week if args.week is not None else compute_auto_week(args.week_offset)
     print(f"[multi] Running {len(leagues)} league(s) for week={week}")
 
     failures = []

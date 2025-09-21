@@ -1,225 +1,138 @@
-name: Build Gazette
+name: Gazette Builder
 
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: "Run mode: single or multi"
+        required: true
+        default: "single"
+        type: choice
+        options: ["single", "multi"]
       week:
-        description: 'Week number'
+        description: "Explicit week (optional)"
         required: false
-        default: '1'
         type: string
+      year:
+        description: "Year (e.g., 2025)"
+        required: true
+        type: string
+      auto_week:
+        description: "Use auto-week?"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      llm_blurbs:
+        description: "Generate LLM blurbs?"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+  schedule:
+    - cron: "0 15 * * 2"   # Tuesdays 15:00 UTC (~9am CST, 10am CDT)
 
 jobs:
-  build-gazette:
+  build:
     runs-on: ubuntu-latest
-    environment: production
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      
-      - name: Install PDF Tools
+      # 1) System tools for PDF/PDF-A
+      - name: Install PDF tools
         run: |
           sudo apt-get update
           sudo apt-get install -y libreoffice ghostscript
 
-      - name: Install dependencies
+      # 2) Python
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
         run: |
-          python -m pip install --upgrade pip "setuptools<81" wheel
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
+          # if using multi runner:
+          pip install pyyaml
 
-      - name: Debug environment
+          # YEAR:      ${{ github.event.inputs.year }}   # e.g., 2025
+      - name: Run Gazette
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ESPN_S2: ${{ secrets.ESPN_S2 }}
-          SWID: ${{ secrets.SWID }}
+          LEAGUE_ID: ${{ secrets.LEAGUE_ID }}          # set in repo secrets (for single mode)
+          YEAR:      ${{ github.event.inputs.year }}   # e.g., 2025
+          WEEK:      ${{ github.event.inputs.week }}   # optional; leave empty and use auto-week
         run: |
-          echo "Python version: $(python --version)"
-          echo "Current directory: $(pwd)"
-          echo "Files in repo:"
-          ls -la
-          echo "ESPN_S2 set: $([[ -n "$ESPN_S2" ]] && echo 'yes' || echo 'no')"
-          echo "SWID set: $([[ -n "$SWID" ]] && echo 'yes' || echo 'no')"
-          echo "OPENAI_API_KEY set: $([[ -n "$OPENAI_API_KEY" ]] && echo 'yes' || echo 'no')"
+          set -e
+          MODE="${{ github.event.inputs.mode }}"
+          AUTO="${{ github.event.inputs.auto_week }}"
+          LLM="${{ github.event.inputs.llm_blurbs }}"
+          WEEK_IN="${{ github.event.inputs.week }}"
 
-      - name: Create output directories
-        run: |
-          mkdir -p recaps
-          mkdir -p artifacts
-          echo "Created directories:"
-          ls -la recaps/ artifacts/
+          if [ -z "$MODE" ]; then MODE="single"; fi
+          if [ -z "$AUTO" ]; then AUTO="true"; fi
+          if [ -z "$LLM" ]; then LLM="true"; fi
 
-      - name: Generate basic team logos for testing
-        run: |
-          mkdir -p logos/generated_logos
-          python3 -c "
-          import json
-          from pathlib import Path
-          import re
-          
-          # Create basic placeholder logos
-          logos_dir = Path('logos/generated_logos')
-          team_logos = {}
-          
-          # Sample team names for testing
-          teams = ['Storm', 'Wafflers', 'Eagles', 'Panthers', 'Hawks', 'Thunder', 'Rebels', 'Titans']
-          
-          for team in teams:
-              safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', team)
-              logo_file = logos_dir / f'{safe_name}.txt'
-              logo_file.write_text(f'Logo placeholder for {team}')
-              team_logos[team] = str(logo_file)
-          
-          # Save the mapping
-          with open('team_logos.json', 'w') as f:
-              json.dump(team_logos, f, indent=2)
-          
-          print(f'Created {len(team_logos)} placeholder logos')
-          "
-
-      - name: Test ESPN connection
-        env:
-          ESPN_S2: ${{ secrets.ESPN_S2 }}
-          SWID: ${{ secrets.SWID }}
-        run: |
-          python3 -c "
-          import os
-          import json
-          from pathlib import Path
-          
-          try:
-              from espn_api.football import League
-              
-              with open('leagues.json') as f:
-                  config = json.load(f)[0]
-              
-              league = League(
-                  league_id=config['league_id'],
-                  year=config['year'],
-                  espn_s2=os.getenv('ESPN_S2'),
-                  swid=os.getenv('SWID')
-              )
-              
-              print(f'✅ Connected to: {league.settings.name}')
-              print(f'Teams: {len(league.teams)}')
-              
-              # Test getting week data
-              try:
-                  week = int('${{ github.event.inputs.week }}' or '1')
-                  scoreboard = league.scoreboard(week=week)
-                  print(f'✅ Found {len(scoreboard)} games for week {week}')
-              except Exception as e:
-                  print(f'⚠️  Could not get week data: {e}')
-              
-          except Exception as e:
-              print(f'❌ ESPN connection failed: {e}')
-              raise
-          "
-      - name: Create required logo files
-        run: |
-          mkdir -p logos/team_logos
-          
-          # Download your sponsor logo from the image you provided
-          # Create the league logo file (copy your actual image file)
-          python3 -c "
-          from pathlib import Path
-          
-          # For now, create proper image file extensions but point to existing files
-          # You'll need to upload your actual image files to the repo
-
-          league_logo_path = Path('logos/team_logos/BrownSEA-KC.png')
-          sponsor_logo_path = Path('logos/team_logos/gazette_logo.png')
-
-          # Check if actual image files exist, if not skip logos for now
-          league_logo_exists = league_logo_path.exists()
-          sponsor_logo_exists = sponsor_logo_path.exists()
-          
-          print(f'League logo exists: {league_logo_exists}')
-          print(f'Sponsor logo exists: {sponsor_logo_exists}')
-          
-          if not league_logo_exists:
-              print('League logo file not found - will skip league logo')
-          if not sponsor_logo_exists:
-              print('Sponsor logo file not found - will skip sponsor logo') 
-          "
-      - name: Build gazette
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ESPN_S2: ${{ secrets.ESPN_S2 }}
-          SWID: ${{ secrets.SWID }}
-        run: |
-          # Set the week number
-          WEEK_NUM="${{ github.event.inputs.week }}"
-          if [ -z "$WEEK_NUM" ]; then
-            WEEK_NUM="1"
-          fi
-          
-          # Define output paths
-          OUTPUT_DIR="recaps"
-          OUTPUT_FILE="$OUTPUT_DIR/gazette_week_${WEEK_NUM}.docx"
-          ARTIFACT_FILE="artifacts/gazette_week_${WEEK_NUM}.docx"
-          
-          echo "Building gazette for week $WEEK_NUM"
-          echo "Output file: $OUTPUT_FILE"
-          
-          # Run the build
-          python build_gazette.py \
-            --template "${{ vars.TEMPLATE || 'recap_template.docx' }}" \
-            --out-docx "$OUTPUT_FILE" \
-            --league-id "${{ vars.LEAGUE_ID || '887998' }}" \
-            --year "${{ vars.YEAR || '2025' }}" \
-            --week "$WEEK_NUM" \
-            --llm-blurbs \
-            --blurb-style sabre \
-            --blurb-words 300 \
-            --temperature 0.4 \
-            --slots 10
-          
-          # Check if file was created
-          if [ -f "$OUTPUT_FILE" ]; then
-            echo "✅ Gazette created successfully: $OUTPUT_FILE"
-            ls -la "$OUTPUT_FILE"
-            
-            # Copy to artifacts directory for upload
-            cp "$OUTPUT_FILE" "$ARTIFACT_FILE"
-            echo "✅ Copied to artifacts: $ARTIFACT_FILE"
+          if [ "$MODE" = "single" ]; then
+            PY="python"
+            if [ -z "$WEEK_IN" ]; then
+              if [ "$AUTO" = "true" ]; then
+                echo "Running single league with auto-week"
+                "$PY" weekly_recap.py \
+                  --league-id "$LEAGUE_ID" \
+                  --year "$YEAR" \
+                  --auto-week \
+                  --llm-blurbs \
+                  --output-dir recaps
+              else
+                echo "Running single league with explicit WEEK secret"
+                "$PY" weekly_recap.py \
+                  --league-id "$LEAGUE_ID" \
+                  --year "$YEAR" \
+                  --week "$WEEK" \
+                  --llm-blurbs \
+                  --output-dir recaps
+              fi
+            else
+              echo "Running single league with explicit week input"
+              "$PY" weekly_recap.py \
+                --league-id "$LEAGUE_ID" \
+                --year "$YEAR" \
+                --week "$WEEK_IN" \
+                --llm-blurbs \
+                --output-dir recaps
+            fi
           else
-            echo "❌ Gazette file was not created!"
-            echo "Contents of output directory:"
-            ls -la "$OUTPUT_DIR/" || echo "Output directory does not exist"
-            exit 1
+            PY="python"
+            if [ -z "$WEEK_IN" ]; then
+              if [ "$AUTO" = "true" ]; then
+                echo "Running MULTI with auto-week"
+                "$PY" weekly_recap_multi.py \
+                  --config leagues.yml \
+                  --auto-week \
+                  --llm-blurbs \
+                  --output-dir recaps
+              else
+                echo "Running MULTI with explicit WEEK secret"
+                "$PY" weekly_recap_multi.py \
+                  --config leagues.yml \
+                  --week "$WEEK" \
+                  --llm-blurbs \
+                  --output-dir recaps
+              fi
+            else
+              echo "Running MULTI with explicit week input"
+              "$PY" weekly_recap_multi.py \
+                --config leagues.yml \
+                --week "$WEEK_IN" \
+                --llm-blurbs \
+                --output-dir recaps
+            fi
           fi
 
-      - name: List all created files
-        run: |
-          echo "=== All files in workspace ==="
-          find . -name "*.docx" -o -name "*.pdf" | head -20
-          echo ""
-          echo "=== Contents of recaps/ ==="
-          ls -la recaps/ || echo "recaps/ directory not found"
-          echo ""
-          echo "=== Contents of artifacts/ ==="
-          ls -la artifacts/ || echo "artifacts/ directory not found"
-
-      - name: Upload gazette as artifact
+      # 4) Upload artifacts (optional, handy for testing)
+      - name: Upload recaps
         uses: actions/upload-artifact@v4
-        if: success()
         with:
-          name: gazette-week-${{ github.event.inputs.week || '1' }}
-          path: |
-            recaps/*.docx
-            artifacts/*.docx
-          retention-days: 30
-
-      - name: Upload additional files as artifact
-        uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: gazette-extras-week-${{ github.event.inputs.week || '1' }}
-          path: |
-            team_logos.json
-            logos/generated_logos/*
-          retention-days: 7
-          if-no-files-found: ignore
+          name: recaps
+          path: recaps/*.docx, recaps/*.pdf

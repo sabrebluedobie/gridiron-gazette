@@ -262,26 +262,22 @@ def assemble_context(league_id: str, year: int, week: int, llm_blurbs: bool) -> 
     This is the only place you may need to adapt to your repo.
     If you already have a function that returns the template context, call it here.
     """
-    # Try to import your existing builder if it exists to avoid refactor right now.
-    try:
-        import gazette_runner  # example: your repo’s context builder module
-        return gazette_runner.assemble_context(league_id=league_id, year=year, week=week, llm_blurbs=llm_blurbs)
-    except Exception:
-        # Minimal stub so script structure is clear.
-        # Replace with your real context keys (team names, stats, awards, etc.)
-        return {
-            "LEAGUE_NAME": "Browns SEA/KC",
-            "WEEK_NUM": week,
-            # Example keys your template likely expects per game:
-            "HOME_TEAM_NAME": "Nana's Hawks",
-            "AWAY_TEAM_NAME": "Phoenix Blues",
-            # Any *_LOGO_PATH can still be provided; resolver will honor or fallback by TEAM_NAME
-            # "HOME_LOGO_PATH": "./logos/team_logos/Nanas_Hawks.png",
-            # "AWAY_LOGO_PATH": "./logos/team_logos/Phoenix_Blues.png",
-            "GAMES": [],          # your list of games/recaps
-            "AWARDS": [],         # weekly awards
-            "GENERATED_AT": dt.datetime.now().isoformat(timespec="seconds"),
-        }
+    # Use fallback context logic since gazette_runner cannot be imported.
+    # Minimal stub so script structure is clear.
+    # Replace with your real context keys (team names, stats, awards, etc.)
+    return {
+        "LEAGUE_NAME": "Browns SEA/KC",
+        "WEEK_NUM": week,
+        # Example keys your template likely expects per game:
+        "HOME_TEAM_NAME": "Nana's Hawks",
+        "AWAY_TEAM_NAME": "Phoenix Blues",
+        # Any *_LOGO_PATH can still be provided; resolver will honor or fallback by TEAM_NAME
+        # "HOME_LOGO_PATH": "./logos/team_logos/Nanas_Hawks.png",
+        # "AWAY_LOGO_PATH": "./logos/team_logos/Phoenix_Blues.png",
+        "GAMES": [],          # your list of games/recaps
+        "AWARDS": [],         # weekly awards
+        "GENERATED_AT": dt.datetime.now().isoformat(timespec="seconds"),
+    }
 
 
 # ======================================================================
