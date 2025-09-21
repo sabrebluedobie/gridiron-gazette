@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import os
-import json
+import json, shlex, subprocess
 import argparse
 from pathlib import Path
 from docxtpl import DocxTemplate, InlineImage
@@ -11,6 +11,39 @@ from glob import glob
 import re
 import sys
 import traceback
+
+def _soffice_bin():
+    mac = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+    return mac if Path(mac).exists() else "soffice"
+
+def export_pdf_a(docx_path: str, out_dir: str) -> Path:
+    out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
+    export = ('pdf:writer_pdf_Export:'
+              '{"SelectPdfVersion":{"type":"long","value":"1"},'
+              '"UseTaggedPDF":{"type":"boolean","value":"true"},'
+              '"EmbedStandardFonts":{"type":"boolean","value":"true"}}')
+    cmd = f'{_soffice_bin()} --headless --convert-to {shlex.quote(export)} ' \
+          f'--outdir {shlex.quote(str(out))} {shlex.quote(str(docx_path))}'
+    subprocess.check_call(cmd, shell=True)
+    return out / (Path(docx_path).stem + ".pdf")
+
+def flatten_pdf(src_pdf: Path, dst_pdf: Path, dpi: int = 200) -> None:
+    tmp = Path("frames"); tmp.mkdir(exist_ok=True)
+    base = tmp / "page"
+    subprocess.check_call(f'pdftoppm -png -r {dpi} {shlex.quote(str(src_pdf))} {shlex.quote(str(base))}', shell=True)
+    pngs = sorted(p for p in tmp.glob("page*.png"))
+    cmd = "img2pdf " + " ".join(shlex.quote(str(p)) for p in pngs) + f" -o {shlex.quote(str(dst_pdf))}"
+    subprocess.check_call(cmd, shell=True)
+    for p in pngs: p.unlink()
+    tmp.rmdir()
+
+def finalize_pdf_for_league(docx_path: str, league_id: int, season: int, week: int) -> Path:
+    """DOCX -> PDF/A -> image-only PDF, stored using league_id slug and week number."""
+    pdf_a = export_pdf_a(docx_path, "out_pdf")
+    out_dir = Path(f"public/gazettes"); out_dir.mkdir(parents=True, exist_ok=True)
+    final_path = out_dir / f"{league_id}-w{week:02}.pdf"
+    flatten_pdf(pdf_a, final_path, dpi=200)  # truly non-editable
+    return final_path
 
 # --- LLM client (uses OPENAI_API_KEY) ---
 try:
