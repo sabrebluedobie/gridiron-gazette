@@ -6,3 +6,8 @@ lxml>=5.3
 pillow>=10
 espn_api==0.45.1
 openai>=1.0.0
+pikepdf>=9.0.0
+google-api-python-client>=2.145.0
+google-auth>=2.33.0
+google-auth-oauthlib>=1.2.1
+
