@@ -493,6 +493,8 @@ def create_image_objects(doc, context):
             except Exception as e:
                 print(f"Error loading image {value}: {e}")
 
+        
+
         elif key in ['LEAGUE_LOGO', 'SPONSOR_LOGO']:
             # Handle league and sponsor logos
             if isinstance(value, str) and Path(value).exists():
