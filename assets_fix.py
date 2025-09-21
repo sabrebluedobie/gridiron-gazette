@@ -1,9 +1,8 @@
 # assets_fix.py
 # JSON-driven logo resolver for Gridiron Gazette (teams + league logo)
-# - Uses ./team_logos.json as source of truth
-# - Accepts values as filenames (e.g., "Phoenix_Blues.png") or paths (e.g., "logos/team_logos/Phoenix_Blues.png")
-# - Handles punctuation/emojis; case/Unicode-insensitive keys
-# - Converts WEBP/GIF/etc. to PNG so python-docx can embed cleanly
+# - Reads ./team_logos.json (keys = display names, values = filenames OR paths)
+# - Handles punctuation/emojis; case/Unicode-insensitive lookups
+# - Converts WEBP/GIF/BMP/TIFF -> PNG so python-docx embeds cleanly
 
 from pathlib import Path
 import json, re, unicodedata
@@ -12,7 +11,7 @@ from PIL import Image
 
 LOGO_ROOT = Path("./logos/team_logos")
 LOGO_MAP_PATH = Path("./team_logos.json")
-PLACEHOLDER = LOGO_ROOT / "placeholder.png"     # optional fallback asset
+PLACEHOLDER = LOGO_ROOT / "placeholder.png"  # optional fallback
 
 PREFERRED = {".png", ".jpg", ".jpeg"}
 ALL_EXTS  = PREFERRED | {".webp", ".gif", ".bmp", ".tif", ".tiff"}
@@ -67,7 +66,7 @@ def _resolve_from_map(display_name: str) -> Path | None:
     p = _value_to_path(val)
     if p.exists():
         return p
-    # Try same stem with any extension if mapped file missing
+    # Try same stem with any ext if mapped file missing
     stem = Path(val).stem
     for ext in ALL_EXTS:
         cand = LOGO_ROOT / f"{stem}{ext}"
@@ -108,13 +107,13 @@ def find_logo_by_name(display_name: str) -> Path:
     # 3) Fallback
     return PLACEHOLDER if PLACEHOLDER.exists() else LOGO_ROOT / "MISSING.png"
 
-# Convenience aliases
+# Public helpers
 def find_team_logo(team_name: str) -> Path:
     return find_logo_by_name(team_name)
 
 def find_league_logo(league_display_name: str) -> Path:
-    # Try explicit league key in JSON first, else fall back to display name guessing.
-    # You can add a JSON entry like:  "LEAGUE:Browns SEA/KC": "logos/team_logos/League_Browns_SEA_KC.png"
+    # If you add a JSON key like "LEAGUE:Your League Name": "logos/team_logos/league.png",
+    # it’ll be picked up; otherwise we try the display name.
     m = _load_map()
     special = m.get(_norm_key(f"LEAGUE:{league_display_name}"))
     if special:
