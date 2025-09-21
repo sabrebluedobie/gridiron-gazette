@@ -35,13 +35,20 @@ on:
         default: "sabre"
         type: choice
         options: ["sabre", "mascot", "default"]
+      environment:
+        description: "Environment to use (for secrets)"
+        required: false
+        default: "production"
+        type: string
   schedule:
     - cron: "0 15 * * 2"   # Tuesdays 15:00 UTC (~9am CST, 10am CDT)
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    environment: production
+    # 👇 THIS IS THE KEY LINE - specifies which environment to use
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    
     steps:
       - uses: actions/checkout@v4
 
@@ -75,15 +82,31 @@ jobs:
           SWID: ${{ secrets.SWID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
+          echo "=== Environment Check ==="
+          echo "Using environment: ${{ github.event.inputs.environment || 'production' }}"
+          echo ""
+          
           echo "=== Checking required files ==="
           ls -la recap_template.docx || echo "⚠️  Template missing"
           ls -la leagues.json || echo "⚠️  leagues.json missing"
           ls -la team_logos.json || echo "⚠️  team_logos.json missing"
           
           echo ""
-          echo "=== Checking secrets ==="
-          if [ -z "$ESPN_S2" ]; then echo "❌ ESPN_S2 not set"; exit 1; fi
-          if [ -z "$SWID" ]; then echo "❌ SWID not set"; exit 1; fi
+          echo "=== Checking secrets from environment ==="
+          if [ -z "$ESPN_S2" ]; then 
+            echo "❌ ESPN_S2 not set in environment '${{ github.event.inputs.environment || 'production' }}'"
+            exit 1
+          else
+            echo "✅ ESPN_S2 is set (${#ESPN_S2} chars)"
+          fi
+          
+          if [ -z "$SWID" ]; then 
+            echo "❌ SWID not set in environment '${{ github.event.inputs.environment || 'production' }}'"
+            exit 1
+          else
+            echo "✅ SWID is set"
+          fi
+          
           if [ -z "$OPENAI_API_KEY" ]; then 
             echo "⚠️  OPENAI_API_KEY not set - LLM blurbs will be disabled"
           else
@@ -102,12 +125,10 @@ jobs:
       # 5) Run Gazette Builder
       - name: Build Gazette
         env:
-          # ESPN credentials
+          # These come from the GitHub Environment specified above
           ESPN_S2: ${{ secrets.ESPN_S2 }}
           SWID: ${{ secrets.SWID }}
-          # OpenAI for LLM blurbs
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          # League info
           LEAGUE_ID: ${{ secrets.LEAGUE_ID }}
           YEAR: ${{ github.event.inputs.year || '2025' }}
           WEEK: ${{ github.event.inputs.week }}
@@ -128,6 +149,7 @@ jobs:
           if [ -z "$BLURB_STYLE" ]; then BLURB_STYLE="sabre"; fi
           
           echo "=== Build Configuration ==="
+          echo "Environment: ${{ github.event.inputs.environment || 'production' }}"
           echo "Mode: $MODE"
           echo "Auto-week: $AUTO"
           echo "LLM Blurbs: $LLM"
