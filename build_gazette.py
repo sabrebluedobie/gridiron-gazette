@@ -11,6 +11,7 @@ from glob import glob
 import re
 import sys
 import traceback
+from scripts.lock_pdf import lock_pdf
 
 def _soffice_bin():
     mac = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
