@@ -18,6 +18,7 @@ from docx.shared import Mm
 from assets_fix import (
     find_team_logo, find_league_logo, debug_log_logo, validate_logo_map
 )
+from footer_gradient import add_footer_gradient
 
 # ---------------------- Configuration ----------------------
 DEFAULT_TEMPLATE = "recap_template.docx"
@@ -187,20 +188,20 @@ def attach_logos(doc: DocxTemplate, ctx: Dict[str, Any]) -> Dict[str, Any]:
 
 # ---------------------- Main -------------------------------
 def main():
-    args = parse_args()
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
-                        format="%(levelname)s %(message)s")
-    week = args.week if not args.auto_week else compute_auto_week(args.week_offset)
-
-    print("=== Building Gridiron Gazette ===")
-    print(f"Template: {args.template}")
-    print(f"Output dir: {args.output_dir}")
-    print(f"League ID: {args.league_id}")
-    print(f"Year: {args.year}")
-    print(f"Week: {week}")
-    print(f"LLM Blurbs: {args.llm_blurbs}\n")
-
     try:
+        args = parse_args()
+        logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
+                            format="%(levelname)s %(message)s")
+        week = args.week if not args.auto_week else compute_auto_week(args.week_offset)
+
+        print("=== Building Gridiron Gazette ===")
+        print(f"Template: {args.template}")
+        print(f"Output dir: {args.output_dir}")
+        print(f"League ID: {args.league_id}")
+        print(f"Year: {args.year}")
+        print(f"Week: {week}")
+        print(f"LLM Blurbs: {args.llm_blurbs}\n")
+
         template_path = pl.Path(args.template)
         if not template_path.exists():
             raise FileNotFoundError(f"Template not found: {args.template}")
