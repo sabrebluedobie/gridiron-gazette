@@ -618,6 +618,9 @@ def main():
         print(f"Loading template: {args.template}")
         doc = DocxTemplate(args.template)
 
+        from footer_gradient import add_footer_gradient
+        add_footer_gradient(docx_path="assets/brand/footer_gradient_diagonal.png", bar_height_mm=12.0, output_path=args.out_docx)
+
         # Convert image paths to InlineImage objects
         print("Processing images...")
         context = create_image_objects(doc, context)
