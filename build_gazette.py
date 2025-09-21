@@ -587,6 +587,13 @@ def main():
             **awards
         }
 
+        from images_attach import create_image_objects
+
+        # build your context = {...} as usual, including HOME_TEAM_NAME / AWAY_TEAM_NAME, etc.
+        context = create_image_objects(doc, context)  # ← converts to InlineImage objects safely
+        doc.render(context)
+
+
         from gazette_helpers import find_league_logo
         logo_path = find_league_logo(league_config.get('name'))
         # insert picture using logo_path
