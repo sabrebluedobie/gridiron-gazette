@@ -1,138 +1,55 @@
-name: Gazette Builder
+# The embedded Python script and triple-quoted string have been removed.
+# Please ensure only valid YAML and shell commands are present in this workflow file.
 
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: "Run mode: single or multi"
-        required: true
-        default: "single"
-        type: choice
-        options: ["single", "multi"]
       week:
-        description: "Explicit week (optional)"
+        description: 'Week number (optional)'
         required: false
-        type: string
-      year:
-        description: "Year (e.g., 2025)"
-        required: true
-        type: string
-      auto_week:
-        description: "Use auto-week?"
-        required: false
-        default: "true"
-        type: choice
-        options: ["true", "false"]
-      llm_blurbs:
-        description: "Generate LLM blurbs?"
-        required: false
-        default: "true"
-        type: choice
-        options: ["true", "false"]
-  schedule:
-    - cron: "0 15 * * 2"   # Tuesdays 15:00 UTC (~9am CST, 10am CDT)
+        default: 'auto'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      # 1) System tools for PDF/PDF-A
-      - name: Install PDF tools
+      # 5) Verify outputs
+      - name: Verify outputs
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libreoffice ghostscript
-
-      # 2) Python
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          # if using multi runner:
-          pip install pyyaml
-
-          # YEAR:      ${{ github.event.inputs.year }}   # e.g., 2025
-      - name: Run Gazette
-        env:
-          LEAGUE_ID: ${{ secrets.LEAGUE_ID }}          # set in repo secrets (for single mode)
-          YEAR:      ${{ github.event.inputs.year }}   # e.g., 2025
-          WEEK:      ${{ github.event.inputs.week }}   # optional; leave empty and use auto-week
-        run: |
-          set -e
-          MODE="${{ github.event.inputs.mode }}"
-          AUTO="${{ github.event.inputs.auto_week }}"
-          LLM="${{ github.event.inputs.llm_blurbs }}"
-          WEEK_IN="${{ github.event.inputs.week }}"
-
-          if [ -z "$MODE" ]; then MODE="single"; fi
-          if [ -z "$AUTO" ]; then AUTO="true"; fi
-          if [ -z "$LLM" ]; then LLM="true"; fi
-
-          if [ "$MODE" = "single" ]; then
-            PY="python"
-            if [ -z "$WEEK_IN" ]; then
-              if [ "$AUTO" = "true" ]; then
-                echo "Running single league with auto-week"
-                "$PY" weekly_recap.py \
-                  --league-id "$LEAGUE_ID" \
-                  --year "$YEAR" \
-                  --auto-week \
-                  --llm-blurbs \
-                  --output-dir recaps
-              else
-                echo "Running single league with explicit WEEK secret"
-                "$PY" weekly_recap.py \
-                  --league-id "$LEAGUE_ID" \
-                  --year "$YEAR" \
-                  --week "$WEEK" \
-                  --llm-blurbs \
-                  --output-dir recaps
-              fi
-            else
-              echo "Running single league with explicit week input"
-              "$PY" weekly_recap.py \
-                --league-id "$LEAGUE_ID" \
-                --year "$YEAR" \
-                --week "$WEEK_IN" \
-                --llm-blurbs \
-                --output-dir recaps
-            fi
-          else
-            PY="python"
-            if [ -z "$WEEK_IN" ]; then
-              if [ "$AUTO" = "true" ]; then
-                echo "Running MULTI with auto-week"
-                "$PY" weekly_recap_multi.py \
-                  --config leagues.yml \
-                  --auto-week \
-                  --llm-blurbs \
-                  --output-dir recaps
-              else
-                echo "Running MULTI with explicit WEEK secret"
-                "$PY" weekly_recap_multi.py \
-                  --config leagues.yml \
-                  --week "$WEEK" \
-                  --llm-blurbs \
-                  --output-dir recaps
-              fi
-            else
-              echo "Running MULTI with explicit week input"
-              "$PY" weekly_recap_multi.py \
-                --config leagues.yml \
-                --week "$WEEK_IN" \
-                --llm-blurbs \
-                --output-dir recaps
-            fi
+          echo "=== Generated Files ==="
+          find recaps -type f \( -name "*.docx" -o -name "*.pdf" \) | while read file; do
+            size=$(du -h "$file" | cut -f1)
+            echo "  📄 $file ($size)"
+          done
+          
+          # Count files
+          DOCX_COUNT=$(find recaps -name "*.docx" | wc -l)
+          PDF_COUNT=$(find recaps -name "*.pdf" | wc -l)
+          
+          echo "Summary: $DOCX_COUNT DOCX, $PDF_COUNT PDF files created"
+          
+          if [ $DOCX_COUNT -eq 0 ]; then
+            echo "❌ No DOCX files created!"
+            exit 1
           fi
 
-      # 4) Upload artifacts (optional, handy for testing)
-      - name: Upload recaps
+      # 6) Upload artifacts
+      - name: Upload gazette artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: recaps
-          path: recaps/*.docx, recaps/*.pdf
+          name: gazette-week-${{ github.event.inputs.week || 'auto' }}
+          path: |
+            recaps/**/*.docx
+            recaps/**/*.pdf
+          retention-days: 90
+          if-no-files-found: error
+
+      # 7) Optional: Create release (if tagged)
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            recaps/**/*.docx
+            recaps/**/*.pdf
+          generate_release_notes: true
