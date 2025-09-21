@@ -1,39 +1,46 @@
-# footer_gradient.py
-# Adds a diagonal gradient strip to the footer using an inline image in a table.
-# This avoids floating shapes that drift in DOCX/PDF.
-
+# --- in build_gazette.py (or footer_gradient.py if you split it) ---
 from docx import Document
 from docx.shared import Mm
-from pathlib import Path
 
-def add_footer_gradient(docx_path: str, gradient_png: str = "./logos/footer_gradient_diagonal.png",
-                        bar_height_mm: float = 12.0) -> None:
-    docx_path = str(docx_path)
-    gradient_png = str(gradient_png)
-    doc = Document(docx_path)
+def add_footer_gradient(docx_path, gradient_png, bar_height_mm: float = 12.0) -> None:
+    doc = Document(str(docx_path))
 
     for section in doc.sections:
-        # Anchor layout so Word/PDF doesn’t "nudge" footer
-        section.bottom_margin = Mm(15)       # ~0.59"
-        section.footer_distance = Mm(8)      # ~0.31"
+        # Anchor layout so Word/PDF doesn’t nudge the footer
+        section.bottom_margin = Mm(15)         # ~0.59"
+        section.footer_distance = Mm(8)        # ~0.31"
         section.different_first_page_header_footer = False
 
         footer = section.footer
 
-        # Clear legacy paragraphs/shapes in footer to avoid conflicts
+        # Clear legacy paragraphs/shapes
         for p in list(footer.paragraphs):
             p._element.getparent().remove(p._element)
 
-        # Footer table (2 rows): gradient strip on top, text row below
-        tbl = footer.add_table(rows=2, cols=1)
-        tbl.autofit = True
+        # Calculate content width (page width minus left/right margins)
+        content_width = section.page_width - section.left_margin - section.right_margin
 
-        # Row 1: insert gradient strip as inline picture
-        run = tbl.rows[0].cells[0].paragraphs[0].add_run()
-        pic = run.add_picture(gradient_png)
-        pic.height = Mm(bar_height_mm)  # width auto-scales
+        # Some python-docx builds require width=... for add_table on headers/footers
+        tbl = footer.add_table(rows=2, cols=1, width=content_width)
+        tbl.autofit = False
 
-        # Row 2: reserved for your existing footer text (leave blank if managed by template)
+        # Force the single column to the full content width
+        tbl.columns[0].width = content_width
+        for row in tbl.rows:
+            row.cells[0].width = content_width
+
+        # Row 1: gradient strip as inline picture
+        cell = tbl.rows[0].cells[0]
+        run = cell.paragraphs[0].add_run()
+        try:
+            pic = run.add_picture(str(gradient_png))
+            # Keep a shallow bar height; width will naturally fill the cell
+            pic.height = Mm(bar_height_mm)
+        except Exception as e:
+            # If the gradient is missing, just leave a blank row
+            print(f"[footer] Could not add gradient image: {e}")
+
+        # Row 2: reserved for footer text (or leave blank for template text)
         tbl.rows[1].cells[0].paragraphs[0].add_run("")
 
-    doc.save(docx_path)
+    doc.save(str(docx_path))
