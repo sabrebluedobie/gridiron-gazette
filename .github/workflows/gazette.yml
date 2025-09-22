@@ -37,13 +37,18 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    environment: production
+    environment: "production"   # <-- must match your Environment name
     env:
-      # These pull from repository secrets
-      LEAGUE_ID: ${{ vars.LEAGUE_ID }}
       ESPN_S2: ${{ secrets.ESPN_S2 }}
-      SWID: ${{ secrets.SWID }}
+      ESPN_SWID: ${{ secrets.SWID }}          # you named it SWID in the env
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      # Optional: your Environment VARIABLES (non-secret)
+      LEAGUE_ID: ${{ vars.LEAGUE_ID }}
+      YEAR: ${{ vars.YEAR }}
+      TEMPLATE: ${{ vars.TEMPLATE }}
+      OUTDOCX: ${{ vars.OUTDOCX }}
+
     steps:
       - name: Check ESPN envs
         env:
@@ -55,6 +60,7 @@ jobs:
           test -n "${ESPN_S2}" && echo "ESPN_S2 present" || (echo "ESPN_S2 missing"; exit 1)
           test -n "${SWID}"    && echo "SWID present"    || (echo "SWID missing"; exit 1)
 
+        
       - name: Checkout code
         uses: actions/checkout@v4
 
