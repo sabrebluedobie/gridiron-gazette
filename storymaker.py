@@ -1,125 +1,194 @@
-# storymaker.py
-# Uses team_mascots.py descriptions to create short matchup stories + image prompts.
+"""
+storymaker.py — LLM blurb generator with Sabre voice routing.
+
+- Loads Sabre voice prompt from prompts/sabre_voice.txt or ENV fallback.
+- Builds structured matchup context from espn_api League object.
+- Calls OpenAI (or returns a templated fallback if unavailable).
+- Returns a list[str] of blurbs, one per matchup.
+"""
 
 from __future__ import annotations
-from typing import Optional, Tuple
-import os, textwrap
+import os
+from pathlib import Path
+from typing import List, Dict, Any
 
-# storymaker.py
-
-SABRE_STORY_PROMPT = """
-Write a ~300-word fantasy football matchup recap in the snarky, sarcastic voice of **Sabre**, the Gridiron Gazette’s Doberman mascot and sideline reporter.
-
-Hard rules:
-- Keep team names, emojis, and all formatting EXACTLY as provided (do not alter or normalize anything).
-- Use details provided by the caller (scores, top performers, busts, D/ST notes).
-- Flow naturally into the Stats Spotlight with a short handoff line from Sabre.
-
-Style & structure (always Sabre narrating; never introduce other mascots):
-1) **Opening punch** (1–2 sentences): Sabre sets the scene with a witty jab or sly observation about the matchup.
-2) **Breakdown** (3–5 short paragraphs): 
-   - Hype the top performers with specific stats and quick, punchy commentary.
-   - Roast the bust(s) with a wry aside—still factual, not mean-spirited.
-   - Include the defense/D-ST note if present (“saved the day” vs “no help today”).
-3) **Close** (1 sentence): A sharp quip or forward-looking remark for next week.
-
-Uniqueness guardrails:
-- Vary openings, transitions, and closers across matchups—no stock phrasing, no templated repeats.
-- Avoid repeating metaphors within the same issue; rotate imagery and verbs.
-- The ONLY line you may repeat between matchups is the last one below.
-
-Stats handoff:
-End the recap with: “And if you need the receipts, here’s the Stats Spotlight.” 
-(Caller will render the actual Stats Spotlight fields.)
-
-Voice notes:
-- Snarky, quick, clever; never cruel.
-- Tight sentences, energetic rhythm, vivid verbs.
-- No filler. Keep it fun and readable.
-
-Output constraints:
-- Target length: 300 words ± 10%.
-- Do NOT modify team names or emojis.
-"""
-# Optional: single-liner Sabre signature you MAY (not must) append sparingly across the issue:
-SABRE_SIGNATURE = "—Sabre, your snarky sideline reporter"
-
-
-# Load mascot descriptions
+# Optional OpenAI import — we fail with a clear error if missing when used.
+_OPENAI_IMPORTED = True
 try:
-    from team_mascots import team_mascots as MASCOTS
+    from openai import OpenAI  # new SDK
 except Exception:
-    MASCOTS = {}
-
-# Optional OpenAI
-try:
-    from openai import OpenAI
-    _OPENAI = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) if os.getenv("OPENAI_API_KEY") else None
-except Exception:
-    _OPENAI = None
-
-
-def get_desc(name: str) -> str:
-    # Graceful fallback if not found
-    return (MASCOTS.get(name)
-            or MASCOTS.get(name.strip())
-            or "")
-
-def _ai_story(home: str, away: str, hdesc: str, adesc: str, scoreline: str) -> str:
-    if not _OPENAI:
-        # Simple fallback template
-        base = f"{home} vs {away}. {hdesc or home} meets {adesc or away}. Final: {scoreline}."
-        return textwrap.shorten(base, width=280, placeholder="…")
-    prompt = (
-        "Write a vivid, family-friendly, 2–3 sentence mini-story for a fantasy football recap. "
-        "Tone: energetic, clever, sports-editorial. Incorporate the two team mascots' vibes and the final score. "
-        "Avoid gore or brand names. 85–120 words.\n"
-        f"Home: {home} — Mascot vibe: {hdesc or '—'}\n"
-        f"Away: {away} — Mascot vibe: {adesc or '—'}\n"
-        f"Scoreline: {scoreline}\n"
-    )
     try:
-        r = _OPENAI.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role":"user","content":prompt}],
-            temperature=0.8, max_tokens=280,
-        )
-        return (r.choices[0].message.content or "").strip()
+        import openai  # legacy
     except Exception:
-        return f"{home} and {away} traded punches all week. Final: {scoreline}."
+        _OPENAI_IMPORTED = False
 
-def build_image_prompts(home: str, away: str, hdesc: str, adesc: str) -> Tuple[str,str]:
-    """
-    Returns (article_prompt, badge_prompt)
-    article_prompt: editorial illustration mixing both vibes
-    badge_prompt: clean vector badge (if you want an alt logo look)
-    """
-    base_style = (
-        "high-quality editorial sports illustration, dynamic lighting, clean background, "
-        "magazine cover composition, no text, tasteful color harmony"
-    )
-    article = (
-        f"{base_style}. Two opposing fantasy football mascots: "
-        f"{home} vibe: {hdesc or 'team spirit'}, vs {away} vibe: {adesc or 'team grit'}. "
-        "Suggest rivalry energy without violence; include subtle football visual motifs."
-    )
-    badge = (
-        "vector logo badge, symmetrical crest, clean iconography, minimal colors, "
-        "print-ready, no text, no gradients, centered composition. "
-        f"Concept blend: {home} ({hdesc or 'spirit'}) + {away} ({adesc or 'grit'})."
-    )
-    return article, badge
 
-def make_story_and_prompts(home: str, away: str, hs, ascore) -> dict:
-    hdesc = get_desc(home)
-    adesc = get_desc(away)
-    scoreline = f"{home} {hs} – {away} {ascore}"
-    story = _ai_story(home, away, hdesc, adesc, scoreline)
-    art_prompt, badge_prompt = build_image_prompts(home, away, hdesc, adesc)
-    return {
-        "story": story,
-        "article_prompt": art_prompt,
-        "badge_prompt": badge_prompt,
-        "home_desc": hdesc,
-        "away_desc": adesc,
+def load_sabre_prompt() -> str:
+    # 1) ENV override
+    env_text = os.getenv("GAZETTE_SABRE_PROMPT")
+    if env_text and env_text.strip():
+        return env_text.strip()
+
+    # 2) prompts file
+    for p in (Path("prompts") / "sabre_voice.txt", Path("config") / "sabre_voice.txt"):
+        if p.exists():
+            try:
+                return p.read_text(encoding="utf-8").strip()
+            except Exception:
+                pass
+
+    # 3) safe default
+    return (
+        "You are Sabre, the Gridiron Gazette’s blue/grey Doberman mascot and beat reporter. "
+        "Voice: hard-working, witty, light snark, family-friendly. Speak in first person as Sabre. "
+        "Rules: Do not invent stats; only use provided data. No mascots/nicknames from leagues; use team names only. "
+        "Always call out the key swing play, top scorers, any underperformers vs projection, and a decisive lineup choice if present. "
+        "Aim ~200 words. End with ‘Sabre out—see you in Week {week}.’"
+    )
+
+
+def normalize_name(name: str) -> str:
+    # Remove most emoji/symbols and extra spaces
+    import re
+    name = re.sub(r"[^\w\s\-’']", " ", name)
+    name = re.sub(r"\s+", " ", name).strip()
+    return name
+
+
+def _player_line(p: Any) -> str:
+    name = getattr(p, "name", "Unknown")
+    pts = getattr(p, "points", None)
+    proj = getattr(p, "projected_total_points", None) or getattr(p, "projected_points", None)
+    if pts is None:  # some espn_api versions use total_points
+        pts = getattr(p, "total_points", None)
+    if proj is None:
+        return f"{name} ({pts} pts)"
+    return f"{name} ({pts} vs {proj} proj)"
+
+
+def _matchup_context(m: Any) -> Dict[str, Any]:
+    home = getattr(m, "home_team", None)
+    away = getattr(m, "away_team", None)
+    ctx: Dict[str, Any] = {
+        "home_team": normalize_name(getattr(home, "team_name", "Home")) if home else "Home",
+        "away_team": normalize_name(getattr(away, "team_name", "Away")) if away else "Away",
+        "home_score": getattr(m, "home_score", None),
+        "away_score": getattr(m, "away_score", None),
+        "home_top": None,
+        "away_top": None,
+        "home_under": None,
+        "away_under": None,
+        "home_notes": [],
+        "away_notes": [],
     }
+
+    # Derive top scorers / underperformers from starters if available
+    def top_and_bust(team: Any):
+        starters = getattr(team, "starters", []) or []
+        if not starters:
+            return None, None
+        # top scorer by points
+        top = max(starters, key=lambda p: getattr(p, "points", getattr(p, "total_points", 0)) or 0)
+        # "bust" by delta projected - actual (largest negative)
+        def delta(p):
+            pts = getattr(p, "points", getattr(p, "total_points", 0)) or 0
+            proj = getattr(p, "projected_total_points", getattr(p, "projected_points", 0)) or 0
+            return pts - proj
+        bust = min(starters, key=delta)
+        return top, bust
+
+    if home:
+        t, b = top_and_bust(home)
+        ctx["home_top"] = _player_line(t) if t else None
+        ctx["home_under"] = _player_line(b) if b else None
+        ctx["home_notes"] = [_player_line(p) for p in (getattr(home, "starters", []) or [])[:4]]
+    if away:
+        t, b = top_and_bust(away)
+        ctx["away_top"] = _player_line(t) if t else None
+        ctx["away_under"] = _player_line(b) if b else None
+        ctx["away_notes"] = [_player_line(p) for p in (getattr(away, "starters", []) or [])[:4]]
+
+    return ctx
+
+
+def _build_user_content(ctx: Dict[str, Any], year: int, week: int, max_words: int) -> str:
+    # Compact but informative natural-language context for the LLM
+    lines = []
+    lines.append(f"Season {year}, Week {week}.")
+    lines.append(f"{ctx['home_team']} ({ctx['home_score']}) vs {ctx['away_team']} ({ctx['away_score']}).")
+    if ctx.get("home_top"):
+        lines.append(f"Home top: {ctx['home_top']}.")
+    if ctx.get("away_top"):
+        lines.append(f"Away top: {ctx['away_top']}.")
+    if ctx.get("home_under"):
+        lines.append(f"Home under: {ctx['home_under']}.")
+    if ctx.get("away_under"):
+        lines.append(f"Away under: {ctx['away_under']}.")
+    if ctx.get("home_notes"):
+        lines.append("Home notable starters: " + "; ".join(ctx["home_notes"]) + ".")
+    if ctx.get("away_notes"):
+        lines.append("Away notable starters: " + "; ".join(ctx["away_notes"]) + ".")
+    lines.append(f"Write no more than ~{max_words} words.")
+    return "\n".join(lines)
+
+
+def _call_openai(messages: List[Dict[str, str]]) -> str:
+    """
+    Supports both new and legacy SDKs. Expects OPENAI_API_KEY in env.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is required for LLM blurbs.")
+
+    model = os.getenv("GAZETTE_LLM_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
+
+    if 'OpenAI' in globals() and _OPENAI_IMPORTED:
+        client = OpenAI(api_key=api_key)  # new SDK
+        resp = client.chat.completions.create(model=model, messages=messages, temperature=0.6)
+        return (resp.choices[0].message.content or "").strip()
+    elif 'openai' in globals():
+        openai.api_key = api_key  # legacy SDK
+        resp = openai.ChatCompletion.create(model=model, messages=messages, temperature=0.6)
+        return (resp["choices"][0]["message"]["content"] or "").strip()
+    else:
+        raise RuntimeError("OpenAI Python SDK not installed. Run `pip install openai`.")
+
+
+def generate_blurbs(league: Any, year: int, week: int, style: str = "sabre", max_words: int = 200) -> List[str]:
+    """
+    Builds matchup contexts and generates one blurb per matchup.
+    """
+    # Gather matchups
+    matchups = getattr(league, "scoreboard")(week)
+    results: List[str] = []
+
+    # Choose system prompt
+    if style.lower() == "sabre":
+        system_prompt = load_sabre_prompt().replace("{week}", str(week))
+    else:
+        system_prompt = "You are a concise fantasy football recap writer. Be factual and specific."
+
+    for m in matchups:
+        ctx = _matchup_context(m)
+        user_content = _build_user_content(ctx, year, week, max_words)
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+
+        # Call LLM
+        try:
+            text = _call_openai(messages)
+        except Exception as e:
+            # If LLM unavailable, return a compact factual fallback
+            text = (
+                f"Week {week}: {ctx['away_team']} {ctx['away_score']} at "
+                f"{ctx['home_team']} {ctx['home_score']}. "
+                f"Top performers — Home: {ctx.get('home_top') or 'N/A'}; "
+                f"Away: {ctx.get('away_top') or 'N/A'}. "
+                f'Sabre out—see you in Week {week}.'
+            )
+        results.append(text)
+
+    return results
