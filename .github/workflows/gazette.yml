@@ -44,9 +44,17 @@ jobs:
       ESPN_S2: ${{ secrets.ESPN_S2 }}
       SWID: ${{ secrets.SWID }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      
-    name: Load and build Gazette
     steps:
+      - name: Check ESPN envs
+        env:
+          ESPN_S2: ${{ secrets.ESPN_S2 }}
+          SWID:    ${{ secrets.SWID }}
+        run: |
+          echo "::add-mask::${ESPN_S2}"
+          echo "::add-mask::${SWID}"
+          test -n "${ESPN_S2}" && echo "ESPN_S2 present" || (echo "ESPN_S2 missing"; exit 1)
+          test -n "${SWID}"    && echo "SWID present"    || (echo "SWID missing"; exit 1)
+
       - name: Checkout code
         uses: actions/checkout@v4
 
