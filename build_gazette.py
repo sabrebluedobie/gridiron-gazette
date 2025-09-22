@@ -2,42 +2,31 @@
 # build_gazette.py — Gridiron Gazette production builder
 # - DOCX render (docxtpl)
 # - Stable diagonal gradient footer (table + inline image)
-# - DOCX -> PDF (LibreOffice)
-# - PDF -> PDF/A-2b (Ghostscript)
+# - DOCX -> PDF (LibreOffice/headless)
+# - PDF -> PDF/A-2b (Ghostscript; embeds/subsets fonts)
 # - Optional lock (resilient if pikepdf missing)
-# - JSON-driven logos for teams + league logo
+# - JSON-driven logos for teams + league + sponsor
 
-import argparse, sys, os, subprocess, shlex, logging, datetime as dt, time
+import argparse, sys, os, subprocess, shlex, logging, datetime as dt
 import pathlib as pl
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from docxtpl import DocxTemplate, InlineImage
 from docx import Document
 from docx.shared import Mm
 
+# local helpers you already have in repo
 from assets_fix import (
-    find_team_logo, find_league_logo, debug_log_logo, 
-    find_logo_by_name, validate_logo_map
+    find_team_logo, find_league_logo, find_logo_by_name,
+    debug_log_logo, validate_logo_map
 )
 from footer_gradient import add_footer_gradient
-
-from gazette_data import espn_get, espn_cookies  # or any specific functions you need
-
-
-def _mask(s: str) -> str:
-    return f"{len(s)} chars" if s else "MISSING"
-
-s2 = os.getenv("ESPN_S2", "")
-swid = os.getenv("SWID", "")
-print(f"[preflight] ESPN_S2: {_mask(s2)}, SWID: {_mask(swid)}")
-if not s2 or not swid:
-    raise SystemExit("Missing ESPN auth cookies in environment. Set ESPN_S2 and SWID in the GitHub environment and job env.")
-
+from gazette_data import assemble_context  # <-- ESPN data + context builder
 
 # ---------------------- Configuration ----------------------
 DEFAULT_TEMPLATE = "recap_template.docx"
 DEFAULT_OUTDIR   = "recaps"
-FOOTER_GRADIENT  = pl.Path("./logos/footer_gradient_diagonal.png")  # place the PNG here
+FOOTER_GRADIENT  = pl.Path("./logos/footer_gradient_diagonal.png")  # ensure this file exists
 
 # ---------------------- CLI / weeks ------------------------
 def parse_args() -> argparse.Namespace:
@@ -51,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--template", default=DEFAULT_TEMPLATE)
     p.add_argument("--output-dir", default=DEFAULT_OUTDIR)
     p.add_argument("--llm-blurbs", action="store_true")
-    p.add_argument("--blurb-style", default="sabre")  # ← NEW, accepts “sabre”, etc.
+    p.add_argument("--blurb-style", default="sabre")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--verbose", action="store_true")
     return p.parse_args()
@@ -60,42 +49,6 @@ def compute_auto_week(offset: int = 0) -> int:
     today = dt.date.today()
     wk = int(today.strftime("%U"))
     return max(1, wk + offset)
-
-# ---------------------- Footer helper ----------------------
-def add_footer_gradient(docx_path: pl.Path, gradient_png: pl.Path, bar_height_mm: float = 12.0) -> None:
-    doc = Document(str(docx_path))
-
-    for section in doc.sections:
-        # Keep footer from nudging
-        section.bottom_margin = Mm(15)       # ~0.59"
-        section.footer_distance = Mm(8)      # ~0.31"
-        section.different_first_page_header_footer = False
-
-        footer = section.footer
-        # Wipe existing paragraphs/shapes in footer
-        for p in list(footer.paragraphs):
-            p._element.getparent().remove(p._element)
-
-        # Compute content width (page − margins); pass width explicitly (python-docx variants need it)
-        content_width = section.page_width - section.left_margin - section.right_margin
-        tbl = footer.add_table(rows=2, cols=1, width=content_width)
-        tbl.autofit = False
-        # Fill width
-        tbl.columns[0].width = content_width
-        for row in tbl.rows:
-            row.cells[0].width = content_width
-
-        # Row 1: gradient strip
-        run = tbl.rows[0].cells[0].paragraphs[0].add_run()
-        try:
-            pic = run.add_picture(str(gradient_png))
-            pic.height = Mm(bar_height_mm)   # width will match cell
-        except Exception as e:
-            print(f"[footer] Could not add gradient image: {e}")
-
-        # Row 2: hold footer text (template-managed or left blank)
-        tbl.rows[1].cells[0].paragraphs[0].add_run("")
-    doc.save(str(docx_path))
 
 # ---------------------- Converters -------------------------
 def docx_to_pdf(docx_path: pl.Path, out_dir: pl.Path | None = None) -> pl.Path:
@@ -119,6 +72,7 @@ def pdf_to_pdfa(input_pdf: pl.Path, output_pdf: pl.Path) -> pl.Path:
         "gs -dBATCH -dNOPAUSE -dNOOUTERSAVE "
         "-sDEVICE=pdfwrite "
         "-dPDFA=2 -dPDFACompatibilityPolicy=1 "
+        "-dEmbedAllFonts=true -dSubsetFonts=true "
         "-dProcessColorModel=/DeviceRGB -dUseCIEColor "
         f"-sOutputFile={shlex.quote(str(out))} {shlex.quote(str(input_pdf))}"
     )
@@ -145,49 +99,45 @@ def lock_pdf_resilient(src: pl.Path, dst: pl.Path, owner: str = "owner-secret") 
         shutil.copyfile(str(src), str(dst))
         return dst
 
-# ---------------------- Context assembly -------------------
-def assemble_context(league_id: str, year: int, week: int, llm_blurbs: bool, blurb_style: str) -> Dict[str, Any]:
-    try:
-        # Try to import gazette_runner if available
-        import importlib.util
-        spec = importlib.util.find_spec("gazette_runner")
-        if spec is not None:
-            gazette_runner = importlib.import_module("gazette_runner")
-            return gazette_runner.assemble_context(
-                league_id=league_id, year=year, week=week,
-                llm_blurbs=llm_blurbs, blurb_style=blurb_style
-            )
-        else:
-            raise ImportError("gazette_runner module not found")
-    except Exception:
-        # stub shows where style would be used
-        return {
-            "LEAGUE_NAME": "Browns SEA/KC",
-            "WEEK_NUM": week,
-            "BLURB_STYLE": blurb_style,   # ← available to your template if needed
-            "HOME_TEAM_NAME": "Nana's Hawks",
-            "AWAY_TEAM_NAME": "Phoenix Blues",
-            "GAMES": [],
-            "AWARDS": [],
-        }
-
+# ---------------------- Logo Injection ---------------------
 def attach_logos(doc: DocxTemplate, ctx: Dict[str, Any]) -> Dict[str, Any]:
     """
     JSON-first logo injection:
-      - League logo from LEAGUE_LOGO_NAME or LEAGUE_NAME
-      - Home/Away team logos from *_TEAM_NAME
-      - Per-game team logos under GAMES list
+      - League logo from explicit LEAGUE_LOGO_PATH or JSON key "LEAGUE_LOGO",
+        otherwise try LEAGUE_LOGO_NAME / LEAGUE_NAME through find_league_logo()
+      - Sponsor from SPONSOR_LOGO_PATH or JSON key "SPONSOR_LOGO"
+      - Home/Away and per-game team logos from *_TEAM_NAME
     """
     out = dict(ctx)
 
-    # League logo — prefer explicit name, else use league display name
-    league_name = out.get("LEAGUE_LOGO_NAME") or out.get("LEAGUE_NAME")
-    if league_name:
-        debug_log_logo(league_name, kind="league")
-        league_logo = find_league_logo(league_name)
-        out["LEAGUE_LOGO"] = InlineImage(doc, str(league_logo), width=Mm(26))
+    # League logo (prefer explicit path)
+    league_path = out.get("LEAGUE_LOGO_PATH")
+    if league_path and pl.Path(league_path).exists():
+        out["LEAGUE_LOGO"] = InlineImage(doc, league_path, width=Mm(26))
+    else:
+        # JSON key direct
+        ll = find_logo_by_name("LEAGUE_LOGO")
+        if ll.exists():
+            out["LEAGUE_LOGO"] = InlineImage(doc, str(ll), width=Mm(26))
+        else:
+            # name-based resolver
+            league_name = out.get("LEAGUE_LOGO_NAME") or out.get("LEAGUE_NAME")
+            if league_name:
+                debug_log_logo(league_name, kind="league")
+                league_logo = find_league_logo(league_name)
+                if league_logo.exists():
+                    out["LEAGUE_LOGO"] = InlineImage(doc, str(league_logo), width=Mm(26))
 
-    # Single-match (top block) team logos if present
+    # Sponsor logo (prefer explicit path)
+    sponsor_path = out.get("SPONSOR_LOGO_PATH")
+    if sponsor_path and pl.Path(sponsor_path).exists():
+        out["SPONSOR_LOGO"] = InlineImage(doc, sponsor_path, width=Mm(50))
+    else:
+        sl = find_logo_by_name("SPONSOR_LOGO")
+        if sl.exists():
+            out["SPONSOR_LOGO"] = InlineImage(doc, str(sl), width=Mm(50))
+
+    # Single-match (top block)
     for side in ("HOME", "AWAY"):
         name_key = f"{side}_TEAM_NAME"
         if out.get(name_key):
@@ -197,8 +147,7 @@ def attach_logos(doc: DocxTemplate, ctx: Dict[str, Any]) -> Dict[str, Any]:
             out[f"{side}_LOGO"] = InlineImage(doc, str(logo_path), width=Mm(20))
 
     # Per-game entries
-    games = out.get("GAMES", [])
-    for g in games:
+    for g in out.get("GAMES", []):
         hn = g.get("HOME_TEAM_NAME")
         an = g.get("AWAY_TEAM_NAME")
         if hn:
@@ -210,92 +159,106 @@ def attach_logos(doc: DocxTemplate, ctx: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 # ---------------------- Main -------------------------------
+def _mask(s: str) -> str:
+    return f"{len(s)} chars" if s else "MISSING"
+
 def main():
-    try:
-        args = parse_args()
-        logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
-                            format="%(levelname)s %(message)s")
-        week = args.week if not args.auto_week else compute_auto_week(args.week_offset)
+    args = parse_args()
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
+                        format="%(levelname)s %(message)s")
+    week = args.week if not args.auto_week else compute_auto_week(args.week_offset)
 
-        print("=== Building Gridiron Gazette ===")
-        print(f"Template: {args.template}")
-        print(f"Output dir: {args.output_dir}")
-        print(f"League ID: {args.league_id}")
-        print(f"Year: {args.year}")
-        print(f"Week: {week}")
-        print(f"LLM Blurbs: {args.llm_blurbs}\n")
+    print("=== Build Configuration ===")
+    print(f"Environment: {os.getenv('GITHUB_ENV', 'local') and 'actions' or 'local'}")
+    print(f"Mode: single")
+    print(f"Auto-week: {'true' if args.auto_week else 'false'}")
+    print(f"LLM Blurbs: {args.llm_blurbs}")
+    print(f"Blurb Style: {args.blurb_style}")
+    print(f"Year: {args.year}")
+    print(f"Week: {week}")
+    print(f"Output: ./{args.output_dir}/")
+    print()
 
-        template_path = pl.Path(args.template)
-        if not template_path.exists():
-            raise FileNotFoundError(f"Template not found: {args.template}")
+    # Preflight: ESPN cookies presence (masked)
+    s2 = os.getenv("ESPN_S2", "")
+    swid = os.getenv("SWID", "")
+    print(f"[preflight] ESPN_S2: {_mask(s2)}, SWID: {_mask(swid)}")
 
-        out_dir = pl.Path(args.output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        docx_path = out_dir / f"gazette_week_{week}.docx"
+    # Validate template
+    template_path = pl.Path(args.template)
+    if not template_path.exists():
+        raise FileNotFoundError(f"Template not found: {args.template}")
 
-        if args.dry_run:
-            print(f"[dry-run] Would build {docx_path}")
-            sys.exit(0)
+    # Prepare output path
+    out_dir = pl.Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    docx_path = out_dir / f"gazette_week_{week}.docx"
 
-        # Preflight: JSON map sanity
-        missing = validate_logo_map()
-        if missing:
-            print(f"[logo] Warning: {missing} mapped logo(s) are missing on disk.")
-
-        # 1) Build context from data
-        ctx = assemble_context(args.league_id, args.year, week, args.llm_blurbs, args.blurb_style)
-
-        # 2) Render DOCX
-        doc = DocxTemplate(str(template_path))
-
-        # League Logo (e.g., "Browns SEA/KC")
-        league_display = ctx.get("LEAGUE_LOGO_NAME") or ctx.get("LEAGUE_NAME")
-        if league_display:
-            debug_log_logo(league_display, kind="league")
-            league_logo_path = find_league_logo(league_display)
-            ctx["LEAGUE_LOGO"] = InlineImage(doc, str(league_logo_path), width=Mm(26))
-
-        # Sponsor Logo
-        sponsor_logo = find_logo_by_name("SPONSOR_LOGO")  # Ensure it's added to team_logos.json
-        ctx["SPONSOR_LOGO"] = InlineImage(doc, str(sponsor_logo), width=Mm(50))  # adjust width as needed
-
-        ctx = attach_logos(doc, ctx)      # inject InlineImage fields
-        doc.render(ctx)
-        doc.save(str(docx_path))
-        print(f"Output DOCX: {docx_path}")
-
-        # 3) Stable footer gradient
-        add_footer_gradient(docx_path, FOOTER_GRADIENT, bar_height_mm=12.0)
-
-        # 4) DOCX -> PDF, then PDF -> PDF/A-2b
-        pdf_path = docx_to_pdf(docx_path)
-        print(f"PDF: {pdf_path}")
-        pdfa_tmp = pdf_path.with_suffix(".pdfa.pdf")
-        pdfa_path = pdf_to_pdfa(pdf_path, pdfa_tmp)
-        print(f"PDF/A: {pdfa_path}")
-
-        # 5) Optional lock (resilient)
-        locked = pdf_path.with_suffix(".locked.pdf")
-        final_pdf = lock_pdf_resilient(pdfa_path, locked)
-
-        # Replace the non-PDF/A with the PDF/A (locked or unlocked)
-        try:
-            pdf_path.unlink(missing_ok=True)
-        except TypeError:
-            if pdf_path.exists():
-                os.remove(str(pdf_path))
-        final_pdf.rename(pdf_path)
-        print(f"[build] Final PDF/A at: {pdf_path}")
-
-        print("[build] SUCCESS")
+    if args.dry_run:
+        print(f"[dry-run] Would build {docx_path}")
         sys.exit(0)
 
+    # JSON logo map sanity
+    missing = validate_logo_map()
+    if missing:
+        print(f"[logo] Warning: {missing} mapped logo(s) are missing on disk.")
+
+    # 1) Build context from data (ESPN fetch inside gazette_data.py)
+    ctx: Dict[str, Any] = assemble_context(
+        league_id=args.league_id,
+        year=args.year,
+        week=week,
+        llm_blurbs=args.llm_blurbs,
+        blurb_style=args.blurb_style
+    )
+
+    # Optional explicit paths for league/sponsor
+    # (uncomment and adjust if you want to force a specific file)
+    # ctx["LEAGUE_LOGO_PATH"]  = "logos/team_logos/brownseakc.png"
+    # ctx["SPONSOR_LOGO_PATH"] = "logos/team_logos/gazette_logo.png"
+
+    # 2) Render DOCX
+    doc = DocxTemplate(str(template_path))
+    ctx = attach_logos(doc, ctx)  # inject InlineImage fields
+    doc.render(ctx)
+    doc.save(str(docx_path))
+    print(f"Output DOCX: {docx_path}")
+
+    # 3) Stable footer gradient (no floating shapes)
+    if FOOTER_GRADIENT.exists():
+        add_footer_gradient(docx_path, FOOTER_GRADIENT, bar_height_mm=12.0)
+    else:
+        print(f"[footer] Gradient image not found at {FOOTER_GRADIENT}, skipping footer overlay.")
+
+    # 4) DOCX -> PDF, then PDF -> PDF/A-2b
+    pdf_path = docx_to_pdf(docx_path)
+    print(f"PDF: {pdf_path}")
+    pdfa_tmp = pdf_path.with_suffix(".pdfa.pdf")
+    pdfa_path = pdf_to_pdfa(pdf_path, pdfa_tmp)
+    print(f"PDF/A: {pdfa_path}")
+
+    # 5) Optional lock (resilient)
+    locked = pdf_path.with_suffix(".locked.pdf")
+    final_pdf = lock_pdf_resilient(pdfa_path, locked)
+
+    # Replace the non-PDF/A with the PDF/A (locked or unlocked)
+    try:
+        pdf_path.unlink(missing_ok=True)  # 3.11+
+    except TypeError:
+        if pdf_path.exists():
+            os.remove(str(pdf_path))
+    final_pdf.rename(pdf_path)
+    print(f"[build] Final PDF/A at: {pdf_path}")
+
+    print("[build] SUCCESS")
+    sys.exit(0)
+
+if __name__ == "__main__":
+    try:
+        main()
     except subprocess.CalledProcessError as e:
         logging.exception("External tool failed: %s", e)
         sys.exit(2)
     except Exception as e:
         logging.exception("Error building gazette: %s", e)
         sys.exit(1)
-
-if __name__ == "__main__":
-    main()
