@@ -457,7 +457,7 @@ def assemble_context(league_id: str, year: int, week: int, llm_blurbs: bool, blu
         
         # Content
         "WEEKLY_INTRO": f"Week {week} delivers thrilling fantasy football action across all matchups!",
-        "title": f"Week {week} Fantasy Football Gazette - {league_name}",
+        "title": f"Week {week} Gridiron Gazette - {league_name}",
         
         # Awards
         "AWARD_TOP_TEAM": top_team,
