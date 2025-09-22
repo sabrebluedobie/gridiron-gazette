@@ -37,6 +37,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment: production
+    name: Load and build Gazette
     steps:
       # 1) Checkout the repo
       - name: Checkout code
