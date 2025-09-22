@@ -21,6 +21,31 @@ from typing import Any, Dict, List, Optional
 import os
 import math
 import json
+import requests
+
+
+def espn_cookies() -> dict:
+    s2 = os.getenv("ESPN_S2", "").strip()
+    swid = os.getenv("SWID", "").strip()
+    if not s2 or not swid:
+        # Masked diagnostics (don’t print values)
+        print(f"[espn] Missing auth cookies: ESPN_S2? {'yes' if s2 else 'no'}; SWID? {'yes' if swid else 'no'}")
+        raise RuntimeError("ESPN auth cookies not present. Ensure ESPN_S2 and SWID are set in Actions secrets/environment.")
+    # SWID must be in braces, e.g. "{ABCD-...-1234}"
+    if not (swid.startswith("{") and swid.endswith("}")):
+        print("[espn] SWID missing surrounding braces { } — fixing at runtime")
+        swid = "{" + swid.strip("{}") + "}"
+    return {"espn_s2": s2, "SWID": swid}
+
+def espn_get(url: str, params=None) -> requests.Response:
+    ck = espn_cookies()
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    return requests.get(url, params=params or {}, headers=headers, cookies=ck, timeout=30)
+
 
 # ----- optional mascot helpers (never fail if missing) -----------------------
 try:

@@ -38,6 +38,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     environment: production
+    env:
+      LEAGUE_ID: ${{ secrets.LEAGUE_ID }}
+      ESPN_S2:   ${{ secrets.ESPN_S2 }}
+      SWID:      ${{ secrets.SWID }}
     name: Load and build Gazette
     steps:
       # 1) Checkout the repo
