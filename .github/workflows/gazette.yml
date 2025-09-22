@@ -25,8 +25,14 @@ on:
         default: "true"
         type: choice
         options: ["true", "false"]
+      blurb_style:
+        description: "Blurb style"
+        required: false
+        default: "sabre"
+        type: string
   schedule:
-    - cron: "0 15 * * 2"   # Tuesdays 15:00 UTC (~9am CST, 10am CDT)
+    # Tuesdays 15:00 UTC (~9a CST, 10a CDT)
+    - cron: "0 15 * * 2"
 
 jobs:
   build:
@@ -36,38 +42,102 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2) Set up Python and create a virtual environment
-      - name: Set up Python and virtual environment
+      # 2) Python + venv
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Create and activate virtual environment
+      - name: Create & activate venv, install deps
         run: |
           python -m venv .venv
           source .venv/bin/activate
           python -m pip install --upgrade pip
-          pip install -r requirements.txt  # Install dependencies
-
-      # 3) Install dependencies from requirements.txt
-      - name: Install dependencies
-        run: |
-          source .venv/bin/activate
           pip install -r requirements.txt
 
-      # 4) Run the build process
+      # 3) System tools for DOCX->PDF->PDF/A and fonts
+      - name: Install LibreOffice, Ghostscript, and fonts
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreoffice ghostscript fontconfig \
+            fonts-inter fonts-dejavu fonts-liberation fonts-noto-core
+          fc-cache -f -v
+
+      # Optional: install project-bundled fonts from repo (if you keep TTFs under fonts/**)
+      - name: Install project-bundled fonts (optional)
+        run: |
+          mkdir -p ~/.local/share/fonts
+          if compgen -G "fonts/**/*.ttf" > /dev/null || compgen -G "fonts/**/*.otf" > /dev/null; then
+            find fonts -type f \( -iname "*.ttf" -o -iname "*.otf" \) -print -exec cp {} ~/.local/share/fonts/ \;
+            fc-cache -f -v
+          fi
+
+      - name: Verify LibreOffice
+        run: |
+          which soffice
+          soffice --version
+
+      # 4) Build
       - name: Run Gazette build
         env:
-          LEAGUE_ID: ${{ secrets.LEAGUE_ID }}  # ensure your secrets are set in GitHub
-          YEAR: 2025
-          WEEK: 2
+            # Put your league ID (and any API keys) in repo Secrets
+            LEAGUE_ID: ${{ secrets.LEAGUE_ID }}
         run: |
-          source .venv/bin/activate  # Activate the venv again (since actions don't persist)
-          python build_gazette.py --league-id $LEAGUE_ID --year $YEAR --week $WEEK --output-dir recaps
+          set -e
+          source .venv/bin/activate
 
-      # 5) Upload the final build as an artifact
-      - name: Upload recaps as artifacts
+          # Inputs → flags
+          WEEK_FLAG=""
+          if [ "${{ github.event.inputs.auto_week || 'true' }}" = "true" ]; then
+            WEEK_FLAG="--auto-week"
+          else
+            # fallback to provided week or 1 if empty
+            W="${{ github.event.inputs.week }}"
+            if [ -z "$W" ]; then W="1"; fi
+            WEEK_FLAG="--week $W"
+          fi
+
+          LLM_FLAG=""
+          if [ "${{ github.event.inputs.llm_blurbs || 'true' }}" = "true" ]; then
+            LLM_FLAG="--llm-blurbs"
+          fi
+
+          MODE="${{ github.event.inputs.mode || 'single' }}"
+          BLURB_STYLE="${{ github.event.inputs.blurb_style || 'sabre' }}"
+
+          echo "=== Build Configuration ==="
+          echo "Mode: $MODE"
+          echo "Auto-week: $([ "${{ github.event.inputs.auto_week || 'true' }}" = "true" ] && echo yes || echo no)"
+          echo "LLM Blurbs: $([ "${{ github.event.inputs.llm_blurbs || 'true' }}" = "true" ] && echo yes || echo no)"
+          echo "Blurb Style: $BLURB_STYLE"
+          echo
+
+          # Single or multi run
+          if [ "$MODE" = "single" ]; then
+            python build_gazette.py \
+              --league-id "$LEAGUE_ID" \
+              --year "$(date +%Y)" \
+              $WEEK_FLAG \
+              $LLM_FLAG \
+              --blurb-style "$BLURB_STYLE" \
+              --output-dir recaps
+          else
+            # Example multi runner (adjust to your script if different)
+            python weekly_recap_multi.py \
+              $WEEK_FLAG \
+              $LLM_FLAG \
+              --blurb-style "$BLURB_STYLE" \
+              --output-dir recaps
+          fi
+
+      # 5) Upload artifacts
+      - name: Upload recaps
         uses: actions/upload-artifact@v4
         with:
           name: recaps
-          path: recaps/*.docx, recaps/*.pdf, recaps/*.pdfa.pdf
+          path: |
+            recaps/*.docx
+            recaps/*.pdf
+            recaps/*.pdfa.pdf
