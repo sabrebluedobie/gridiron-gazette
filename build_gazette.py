@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--template", default=DEFAULT_TEMPLATE)
     p.add_argument("--output-dir", default=DEFAULT_OUTDIR)
     p.add_argument("--llm-blurbs", action="store_true")
+    p.add_argument("--blurb-style", default="sabre")  # ← NEW, accepts “sabre”, etc.
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--verbose", action="store_true")
     return p.parse_args()
@@ -131,22 +132,30 @@ def lock_pdf_resilient(src: pl.Path, dst: pl.Path, owner: str = "owner-secret") 
         return dst
 
 # ---------------------- Context assembly -------------------
-def assemble_context(league_id: str, year: int, week: int, llm_blurbs: bool) -> Dict[str, Any]:
-    """
-    Wire this to your real data/templating code.
-    If you already have a function for context, call it here instead of this stub.
-    """
-    # Replace this stub with your actual context builder if available.
-    # If you have a function for context, call it here.
-    return {
-        "LEAGUE_NAME": "Browns SEA/KC",
-        "WEEK_NUM": week,
-        "HOME_TEAM_NAME": "Nana's Hawks",
-        "AWAY_TEAM_NAME": "Phoenix Blues",
-        "GAMES": [],
-        "AWARDS": [],
-        "GENERATED_AT": dt.datetime.now().isoformat(timespec="seconds"),
-    }
+def assemble_context(league_id: str, year: int, week: int, llm_blurbs: bool, blurb_style: str) -> Dict[str, Any]:
+    try:
+        # Try to import gazette_runner if available
+        import importlib.util
+        spec = importlib.util.find_spec("gazette_runner")
+        if spec is not None:
+            gazette_runner = importlib.import_module("gazette_runner")
+            return gazette_runner.assemble_context(
+                league_id=league_id, year=year, week=week,
+                llm_blurbs=llm_blurbs, blurb_style=blurb_style
+            )
+        else:
+            raise ImportError("gazette_runner module not found")
+    except Exception:
+        # stub shows where style would be used
+        return {
+            "LEAGUE_NAME": "Browns SEA/KC",
+            "WEEK_NUM": week,
+            "BLURB_STYLE": blurb_style,   # ← available to your template if needed
+            "HOME_TEAM_NAME": "Nana's Hawks",
+            "AWAY_TEAM_NAME": "Phoenix Blues",
+            "GAMES": [],
+            "AWARDS": [],
+        }
 
 def attach_logos(doc: DocxTemplate, ctx: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -220,7 +229,7 @@ def main():
             print(f"[logo] Warning: {missing} mapped logo(s) are missing on disk.")
 
         # 1) Build context from data
-        ctx = assemble_context(args.league_id, args.year, week, args.llm_blurbs)
+        ctx = assemble_context(args.league_id, args.year, week, args.llm_blurbs, args.blurb_style)
 
         # 2) Render DOCX
         doc = DocxTemplate(str(template_path))
