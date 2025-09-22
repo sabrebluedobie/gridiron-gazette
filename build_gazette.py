@@ -21,6 +21,9 @@ from assets_fix import (
 )
 from footer_gradient import add_footer_gradient
 
+from gazette_data import espn_get, espn_cookies  # or any specific functions you need
+
+
 def _mask(s: str) -> str:
     return f"{len(s)} chars" if s else "MISSING"
 
