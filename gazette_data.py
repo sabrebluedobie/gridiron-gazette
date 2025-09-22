@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """
-COMPREHENSIVE FIX for gazette_data.py
-Fixes: ESPN auth, LLM blurbs, missing data, template variables
+gazette_data.py - FINAL PRODUCTION VERSION
+
+Handles:
+- ESPN API with multiple auth methods and fallbacks
+- Enhanced LLM blurb generation 
+- Proper Unicode handling for team names with emojis
+- Multi-league support via team_logos.json
+- Comprehensive error handling and logging
 """
 from __future__ import annotations
 import os
@@ -19,9 +25,8 @@ def get_credentials() -> tuple[str, str, str]:
     league_id = os.getenv("LEAGUE_ID", "").strip()
     
     if espn_s2 and swid and league_id:
-        print(f"[auth] ✅ Environment credentials found")
+        print(f"[auth] Using environment credentials")
         print(f"[auth] ESPN_S2 length: {len(espn_s2)}")
-        print(f"[auth] SWID: {swid}")
         print(f"[auth] League ID: {league_id}")
         
         # URL decode if needed
@@ -33,34 +38,35 @@ def get_credentials() -> tuple[str, str, str]:
         # Ensure SWID has braces
         if not (swid.startswith("{") and swid.endswith("}")):
             swid = "{" + swid.strip("{}") + "}"
-            print(f"[auth] Fixed SWID format: {swid}")
+            print(f"[auth] Fixed SWID format")
         
         return espn_s2, swid, league_id
     
-    print("[auth] ❌ Missing environment credentials")
+    print("[auth] Missing environment credentials")
     return "", "", ""
 
 def test_espn_auth_methods(league_id: str, year: int, week: int) -> Dict[str, Any]:
-    """Try different authentication approaches"""
+    """Try multiple ESPN authentication approaches"""
     espn_s2, swid, _ = get_credentials()
     
     if not espn_s2 or not swid:
-        print("[auth] ❌ No credentials available")
+        print("[auth] No credentials available")
         return create_enhanced_sample_data()
     
-    # Method 1: Try different cookie formats
-    cookie_variants = [
-        {"espn_s2": espn_s2, "SWID": swid},  # Current format
-        {"ESPN_S2": espn_s2, "SWID": swid},  # Alternative name
-        {"espn_s2": espn_s2, "swid": swid},  # Lowercase swid
-    ]
-    
-    # Method 2: Try different URLs
+    # Try different URL endpoints
     url_variants = [
         f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{year}/segments/0/leagues/{league_id}",
         f"https://fantasy.espn.com/apis/v3/games/ffl/seasons/{year}/segments/0/leagues/{league_id}",
     ]
     
+    # Try different cookie formats
+    cookie_variants = [
+        {"espn_s2": espn_s2, "SWID": swid},
+        {"ESPN_S2": espn_s2, "SWID": swid},
+        {"espn_s2": espn_s2, "swid": swid},
+    ]
+    
+    # Try different header sets
     headers_variants = [
         {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -81,13 +87,12 @@ def test_espn_auth_methods(league_id: str, year: int, week: int) -> Dict[str, An
     for i, url in enumerate(url_variants):
         for j, cookies in enumerate(cookie_variants):
             for k, headers in enumerate(headers_variants):
-                print(f"[auth] Trying method {i+1}.{j+1}.{k+1}: {url.split('/')[-3]}")
+                print(f"[auth] Trying method {i+1}.{j+1}.{k+1}")
                 
                 try:
                     response = requests.get(url, params=params, headers=headers, cookies=cookies, timeout=30)
                     
                     print(f"[auth] Status: {response.status_code}")
-                    print(f"[auth] Content-Type: {response.headers.get('content-type', 'unknown')}")
                     
                     if response.status_code == 200:
                         content_type = response.headers.get('content-type', '')
@@ -98,10 +103,10 @@ def test_espn_auth_methods(league_id: str, year: int, week: int) -> Dict[str, An
                                 schedule = data.get("schedule", [])
                                 
                                 if teams and schedule:
-                                    print(f"[auth] 🎉 SUCCESS! Found {len(teams)} teams, {len(schedule)} matchups")
+                                    print(f"[auth] SUCCESS! Found {len(teams)} teams, {len(schedule)} matchups")
                                     return process_espn_data(data)
                                 elif teams:
-                                    print(f"[auth] ✅ Found teams only, creating matchups")
+                                    print(f"[auth] Found teams only, creating matchups")
                                     return create_games_from_teams(teams)
                             except json.JSONDecodeError:
                                 continue
@@ -110,13 +115,13 @@ def test_espn_auth_methods(league_id: str, year: int, week: int) -> Dict[str, An
                     print(f"[auth] Method failed: {e}")
                     continue
     
-    print("[auth] ❌ All authentication methods failed")
+    print("[auth] All authentication methods failed")
     
     # Try espn_api package as final attempt
     return try_espn_api_package(league_id, year, week)
 
 def try_espn_api_package(league_id: str, year: int, week: int) -> Dict[str, Any]:
-    """Try espn_api package"""
+    """Try espn_api package as backup"""
     try:
         print("[backup] Trying espn_api package...")
         from espn_api.football import League
@@ -132,9 +137,8 @@ def try_espn_api_package(league_id: str, year: int, week: int) -> Dict[str, Any]
             swid=swid
         )
         
-        print(f"[backup] ✅ Connected to: {league.settings.name}")
+        print(f"[backup] Connected to: {league.settings.name}")
         
-        # Get current week scoreboard
         scoreboard = league.scoreboard(week=week)
         games = []
         
@@ -157,7 +161,7 @@ def try_espn_api_package(league_id: str, year: int, week: int) -> Dict[str, Any]
                 continue
         
         if games:
-            print(f"[backup] ✅ Got {len(games)} games from espn_api")
+            print(f"[backup] Got {len(games)} games from espn_api")
             return {"games": games}
     
     except Exception as e:
@@ -285,7 +289,7 @@ def create_enhanced_sample_data() -> Dict[str, Any]:
     """Create comprehensive sample data with all content"""
     print("[sample] Creating enhanced sample data with full content")
     
-    # Your actual teams
+    # Your actual teams from team_logos.json
     real_teams = [
         "Annie1235 slayy",
         "Phoenix Blues", 
@@ -371,7 +375,6 @@ Do not change team names or scores."""
                 
             except Exception as e:
                 print(f"[llm] Error for game {i}: {e}")
-                # Keep the basic recap
                 continue
         
     except Exception as e:
@@ -486,7 +489,7 @@ def assemble_context(league_id: str, year: int, week: int, llm_blurbs: bool, blu
         "LLM_ENABLED": llm_blurbs
     }
     
-    print(f"[ctx] ✅ Enhanced context built: {len(games)} games, LLM: {llm_blurbs}")
+    print(f"[ctx] Enhanced context built: {len(games)} games, LLM: {llm_blurbs}")
     return context
 
 def fetch_espn_data(league_id: str, year: int, week: int) -> Dict[str, Any]:
