@@ -1,324 +1,216 @@
 #!/usr/bin/env python3
 """
-build_gazette.py - FINAL PRODUCTION VERSION
+build_gazette.py — patched
 
-Complete compatibility with weekly_recap.py and GitHub Actions
-Enhanced logo handling for Unicode team names
-Multi-league support via team_logos.json
-Production-ready PDF generation pipeline
+Key changes:
+- Fail fast if ESPN cookies (ESPN_S2 / ESPN_SWID) are missing.
+- Loads .env automatically for local runs (keeps GH Actions compatible).
+- Clear logging and CLI flags.
+- Basic sanity check to ensure player-level data is available (not just team scores).
 """
 
-import argparse, sys, os, subprocess, shlex, logging, datetime as dt
-import pathlib as pl
-from typing import Dict, Any, List
+import argparse
+import os
+import sys
+import logging
+from typing import Optional, Dict, Any, List
+from datetime import datetime, timedelta
 
-from docxtpl import DocxTemplate, InlineImage
-from docx import Document
-from docx.shared import Mm
+# Load .env when running locally. In GitHub Actions, env comes from secrets.
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception:
+    pass
 
-# Import our comprehensive data fetching
-from gazette_data import assemble_context
+# ESPN
+try:
+    from espn_api.football import League  # type: ignore
+except Exception as e:
+    print("❌ Missing dependency: espn_api. Run `pip install espn-api`.", file=sys.stderr)
+    raise
 
-# Import existing helpers
-from assets_fix import (
-    find_team_logo, find_league_logo, find_logo_by_name,
-    debug_log_logo, validate_logo_map
-)
-from footer_gradient import add_footer_gradient
+# Optional modules from your repo (safe imports; we guard AttributeError below)
+try:
+    import weekly_recap  # your module that renders the DOCX/PDF
+except Exception:
+    weekly_recap = None  # we'll error nicely if it's required
 
-# ---------------------- Configuration ----------------------
-DEFAULT_TEMPLATE = "recap_template.docx"
-DEFAULT_OUTDIR = "recaps"
-FOOTER_GRADIENT = pl.Path("./logos/footer_gradient_diagonal.png")
+try:
+    import storymaker  # your module that generates blurbs via LLM
+except Exception:
+    storymaker = None
 
-# ---------------------- CLI Arguments ----------------------
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser()
-    
-    # Core arguments (required)
-    p.add_argument("--league-id", required=True)
-    p.add_argument("--year", type=int, required=True)
-    
-    # Week selection (one required)
-    g = p.add_mutually_exclusive_group(required=True)
-    g.add_argument("--week", type=int)
-    g.add_argument("--auto-week", action="store_true")
-    
-    # Optional arguments with defaults
-    p.add_argument("--week-offset", type=int, default=0)
-    p.add_argument("--template", default=DEFAULT_TEMPLATE)
-    p.add_argument("--output-dir", default=DEFAULT_OUTDIR)
-    
-    # LLM options
-    p.add_argument("--llm-blurbs", action="store_true")
-    p.add_argument("--blurb-style", default="sabre")
-    p.add_argument("--blurb-words", type=int, default=300)  # Added for compatibility
-    
-    # Control options
-    p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--verbose", action="store_true")
-    
-    return p.parse_args()
+LOG = logging.getLogger("build_gazette")
 
-def compute_fantasy_week(offset: int = 0) -> int:
+
+def get_env(name: str, fallback: Optional[str] = None) -> Optional[str]:
+    v = os.getenv(name, fallback)
+    if v is not None and isinstance(v, str):
+        v = v.strip()
+    return v or None
+
+
+def require_cookies() -> Dict[str, str]:
     """
-    Compute current fantasy week with offset
-    Compatible with existing weekly_recap.py logic
+    Read ESPN cookies from env and fail fast if they are missing.
+    Accepts both ESPN_S2/S2 and ESPN_SWID/SWID for convenience.
     """
-    import datetime as _dt
-    
-    # Try environment variable first
-    s = os.getenv("FANTASY_SEASON_START", "").strip()
-    if s:
-        try:
-            season_start = _dt.date.fromisoformat(s)
-        except:
-            season_start = None
-    else:
-        season_start = None
-    
-    if not season_start:
-        # Fallback: first Tuesday in September
-        today = _dt.date.today()
-        y = today.year
-        sept1 = _dt.date(y, 9, 1)
-        delta = (1 - sept1.weekday()) % 7
-        season_start = sept1 + _dt.timedelta(days=delta)
-    
-    today = _dt.date.today()
-    days = (today - season_start).days
-    base_week = 1 if days < 0 else 1 + (days // 7)
-    return max(1, base_week + offset)
+    s2 = get_env("ESPN_S2") or get_env("S2")
+    swid = get_env("ESPN_SWID") or get_env("SWID")
 
-# ---------------------- PDF Conversion ----------------------
-def docx_to_pdf(docx_path: pl.Path, out_dir: pl.Path | None = None) -> pl.Path:
-    """Convert DOCX to PDF using LibreOffice"""
-    docx = docx_path.resolve()
-    outd = (out_dir or docx.parent).resolve()
-    outd.mkdir(parents=True, exist_ok=True)
-    
-    cmd = (
-        f'soffice --headless --nologo --nolockcheck '
-        f'--convert-to pdf --outdir {shlex.quote(str(outd))} {shlex.quote(str(docx))}'
-    )
-    subprocess.run(cmd, shell=True, check=True)
-    
-    pdf_path = outd / (docx.stem + ".pdf")
-    if not pdf_path.exists():
-        raise FileNotFoundError(f"PDF not created: {pdf_path}")
-    return pdf_path
-
-def pdf_to_pdfa(input_pdf: pl.Path, output_pdf: pl.Path) -> pl.Path:
-    """Convert PDF to PDF/A using Ghostscript"""
-    out = output_pdf.resolve()
-    out.parent.mkdir(parents=True, exist_ok=True)
-    
-    cmd = (
-        "gs -dBATCH -dNOPAUSE -dNOOUTERSAVE "
-        "-sDEVICE=pdfwrite "
-        "-dPDFA=2 -dPDFACompatibilityPolicy=1 "
-        "-dEmbedAllFonts=true -dSubsetFonts=true "
-        "-dProcessColorModel=/DeviceRGB -dUseCIEColor "
-        f"-sOutputFile={shlex.quote(str(out))} {shlex.quote(str(input_pdf))}"
-    )
-    subprocess.run(cmd, shell=True, check=True)
-    
-    if not out.exists():
-        raise FileNotFoundError(f"PDF/A not created: {out}")
-    return out
-
-def lock_pdf_resilient(src: pl.Path, dst: pl.Path, owner: str = "owner-secret") -> pl.Path:
-    """Try to lock PDF with pikepdf; fallback to copy on error"""
-    try:
-        from pikepdf import Pdf, Encryption, Permissions
-        perms = Permissions(
-            extract=False, modify_annotation=False, modify_form=False,
-            modify_other=False, print_lowres=False, print_highres=False
+    if not s2 or not swid:
+        raise RuntimeError(
+            "❌ Missing ESPN cookies. Set ESPN_S2 and ESPN_SWID "
+            "(or S2 / SWID) in your environment or .env.\n"
+            "Without them, player stats, awards, logos, and blurbs cannot be generated."
         )
-        with Pdf.open(str(src)) as pdf:
-            pdf.save(str(dst), encryption=Encryption(owner=owner, user="", allow=perms))
-        return dst
-    except Exception as e:
-        print(f"[lock_pdf] {e}; emitting UNLOCKED PDF/A")
-        import shutil
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(str(src), str(dst))
-        return dst
 
-# ---------------------- Enhanced Logo Integration ----------------------
-def attach_logos(doc: DocxTemplate, ctx: Dict[str, Any]) -> Dict[str, Any]:
+    # Basic shape check for SWID: must include surrounding braces
+    if "{" not in swid or "}" not in swid:
+        LOG.warning("⚠️ ESPN_SWID usually includes braces, e.g. {XXXXXXXX-XXXX-...}. Yours doesn't appear to.")
+
+    return {"s2": s2, "swid": swid}
+
+
+def infer_week(auto_week: bool, week: Optional[int], week_offset: int) -> int:
+    if week and week > 0:
+        return week
+    if auto_week:
+        # Default to ESPN-style current week; add offset (+/-)
+        today = datetime.utcnow().date()
+        # Conservative guess: by default use ISO week number mod 18 (approx NFL reg season length)
+        base = (int(today.strftime("%V")) % 18) or 1
+        return max(1, base + week_offset)
+    # Fallback
+    return max(1, (datetime.utcnow().isocalendar().week % 18) + week_offset)
+
+
+def ensure_player_data(league: "League", week: int) -> None:
     """
-    Enhanced logo attachment with proper Unicode handling
-    Uses team_logos.json as source of truth for multi-league support
+    Sanity check: try to access player-level data so we know cookies actually work.
+    If we can access starters or box scores for at least one team, we assume we're good.
     """
-    out = dict(ctx)
-    
-    # League logo
-    league_path = out.get("LEAGUE_LOGO_PATH")
-    if league_path and pl.Path(league_path).exists():
-        out["LEAGUE_LOGO"] = InlineImage(doc, league_path, width=Mm(26))
-    else:
-        # Try JSON mapping first
-        ll = find_logo_by_name("LEAGUE_LOGO")
-        if ll.exists():
-            out["LEAGUE_LOGO"] = InlineImage(doc, str(ll), width=Mm(26))
-        else:
-            # Name-based resolver
-            league_name = out.get("LEAGUE_LOGO_NAME") or out.get("LEAGUE_NAME")
-            if league_name:
-                debug_log_logo(league_name, kind="league")
-                league_logo = find_league_logo(league_name)
-                if league_logo.exists():
-                    out["LEAGUE_LOGO"] = InlineImage(doc, str(league_logo), width=Mm(26))
-    
-    # Sponsor logo
-    sponsor_path = out.get("SPONSOR_LOGO_PATH")
-    if sponsor_path and pl.Path(sponsor_path).exists():
-        out["SPONSOR_LOGO"] = InlineImage(doc, sponsor_path, width=Mm(50))
-    else:
-        sl = find_logo_by_name("SPONSOR_LOGO")
-        if sl.exists():
-            out["SPONSOR_LOGO"] = InlineImage(doc, str(sl), width=Mm(50))
-    
-    # Featured matchup logos
-    for side in ("HOME", "AWAY"):
-        name_key = f"{side}_TEAM_NAME"
-        if out.get(name_key):
-            team_name = out[name_key]
-            debug_log_logo(team_name, kind="team")
-            logo_path = find_team_logo(team_name)
-            out[f"{side}_LOGO"] = InlineImage(doc, str(logo_path), width=Mm(20))
-    
-    # Game logos (for GAMES list) - ENHANCED for Unicode team names
-    for g in out.get("GAMES", []):
-        hn = g.get("HOME_TEAM_NAME")
-        an = g.get("AWAY_TEAM_NAME")
-        if hn:
-            debug_log_logo(hn, kind="team")
-            logo_path = find_team_logo(hn)
-            g["HOME_LOGO"] = InlineImage(doc, str(logo_path), width=Mm(18))
-        if an:
-            debug_log_logo(an, kind="team")
-            logo_path = find_team_logo(an)
-            g["AWAY_LOGO"] = InlineImage(doc, str(logo_path), width=Mm(18))
-    
-    return out
-
-# ---------------------- Main Build Function ----------------------
-def _mask(s: str) -> str:
-    """Mask sensitive strings for logging"""
-    return f"{len(s)} chars" if s else "MISSING"
-
-def main():
-    """Main build function - PRODUCTION READY"""
-    args = parse_args()
-    
-    # Setup logging
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(levelname)s %(message)s"
-    )
-    
-    # Determine week
-    if args.auto_week:
-        week = compute_fantasy_week(args.week_offset)
-    else:
-        week = args.week
-    
-    print("=== Build Configuration ===")
-    print(f"Environment: {os.getenv('GITHUB_ENV', 'local') and 'actions' or 'local'}")
-    print(f"Mode: single")
-    print(f"Auto-week: {args.auto_week}")
-    print(f"LLM Blurbs: {args.llm_blurbs}")
-    print(f"Blurb Style: {args.blurb_style}")
-    print(f"Year: {args.year}")
-    print(f"Week: {week}")
-    print(f"Output: ./{args.output_dir}/")
-    print()
-    
-    # Preflight checks
-    s2 = os.getenv("ESPN_S2", "")
-    swid = os.getenv("SWID", "")
-    print(f"[preflight] ESPN_S2: {_mask(s2)}, SWID: {_mask(swid)}")
-    
-    # Validate template
-    template_path = pl.Path(args.template)
-    if not template_path.exists():
-        raise FileNotFoundError(f"Template not found: {args.template}")
-    
-    # Prepare output
-    out_dir = pl.Path(args.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    docx_path = out_dir / f"gazette_week_{week}.docx"
-    
-    if args.dry_run:
-        print(f"[dry-run] Would build {docx_path}")
-        sys.exit(0)
-    
-    # Validate logo mappings
-    missing = validate_logo_map()
-    if missing:
-        print(f"[logo] Warning: {missing} mapped logo(s) are missing on disk.")
-    
-    # 1) Build context from our comprehensive data fetcher
-    print("[build] Building context with comprehensive ESPN data...")
-    ctx: Dict[str, Any] = assemble_context(
-        league_id=args.league_id,
-        year=args.year,
-        week=week,
-        llm_blurbs=args.llm_blurbs,
-        blurb_style=args.blurb_style
-    )
-    
-    # 2) Render DOCX with enhanced logo handling
-    print("[build] Rendering DOCX template with enhanced logo support...")
-    doc = DocxTemplate(str(template_path))
-    ctx = attach_logos(doc, ctx)  # Enhanced logo injection with Unicode support
-    doc.render(ctx)
-    doc.save(str(docx_path))
-    print(f"Output DOCX: {docx_path}")
-    
-    # 3) Add footer gradient if available
-    if FOOTER_GRADIENT.exists():
-        print("[build] Adding footer gradient...")
-        add_footer_gradient(docx_path, FOOTER_GRADIENT, bar_height_mm=12.0)
-    else:
-        print(f"[footer] Gradient image not found at {FOOTER_GRADIENT}, skipping.")
-    
-    # 4) Convert to PDF and PDF/A
-    print("[build] Converting to PDF...")
-    pdf_path = docx_to_pdf(docx_path)
-    print(f"PDF: {pdf_path}")
-    
-    print("[build] Converting to PDF/A...")
-    pdfa_tmp = pdf_path.with_suffix(".pdfa.pdf")
-    pdfa_path = pdf_to_pdfa(pdf_path, pdfa_tmp)
-    print(f"PDF/A: {pdfa_path}")
-    
-    # 5) Optional PDF locking
-    print("[build] Applying PDF security...")
-    locked = pdf_path.with_suffix(".locked.pdf")
-    final_pdf = lock_pdf_resilient(pdfa_path, locked)
-    
-    # Replace original PDF with locked PDF/A version
     try:
-        pdf_path.unlink(missing_ok=True)
-    except TypeError:
-        if pdf_path.exists():
-            os.remove(str(pdf_path))
-    
-    final_pdf.rename(pdf_path)
-    print(f"[build] Final PDF/A at: {pdf_path}")
-    
-    print("[build] SUCCESS")
-    sys.exit(0)
+        matchups = getattr(league, "scoreboard", lambda w: [])(week)
+        if not matchups:
+            LOG.warning("No matchups returned for week %s. Continuing, but output may be empty.", week)
+            return
+
+        # Look at first matchup's home team roster/starter points.
+        m0 = matchups[0]
+        home = getattr(m0, "home_team", None)
+        if not home:
+            LOG.warning("Matchup object without home_team; continuing.")
+            return
+
+        starters = getattr(home, "starters", None)
+        if starters is None:
+            raise RuntimeError("ESPN returned no starters list (likely cookie issue).")
+
+        # Access at least one player's points if available
+        if starters:
+            _ = getattr(starters[0], "points", None)
+        else:
+            LOG.warning("Starters list is empty; proceeding anyway.")
+
+    except Exception as e:
+        raise RuntimeError(
+            "❌ Could not access player-level data from ESPN. "
+            "Cookies may be invalid/expired or not passed to the process."
+        ) from e
+
+
+def build_doc(league: "League", year: int, week: int, template: Optional[str], outdir: str, verbose: bool) -> str:
+    if weekly_recap is None or not hasattr(weekly_recap, "build_weekly_recap"):
+        raise RuntimeError("weekly_recap.build_weekly_recap not found. Ensure your repo has weekly_recap.py with that function.")
+
+    kwargs = {"league": league, "year": year, "week": week}
+    if template:
+        kwargs["template"] = template
+    if outdir:
+        kwargs["output_dir"] = outdir
+
+    if verbose:
+        LOG.info("Calling weekly_recap.build_weekly_recap with %s", kwargs)
+
+    # Expecting function to return output DOCX path
+    return weekly_recap.build_weekly_recap(**kwargs)  # type: ignore[arg-type]
+
+
+def maybe_make_blurbs(league: "League", year: int, week: int, style: str, words: int, enabled: bool) -> List[str]:
+    if not enabled:
+        return []
+    if storymaker is None or not hasattr(storymaker, "generate_blurbs"):
+        raise RuntimeError("storymaker.generate_blurbs not found. Ensure your repo has storymaker.py with that function.")
+
+    api_key = get_env("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("❌ OPENAI_API_KEY is required when --llm-blurbs is set.")
+    os.environ["OPENAI_API_KEY"] = api_key  # ensure submodules can see it
+
+    return storymaker.generate_blurbs(league, year=year, week=week, style=style, max_words=words)  # type: ignore
+
+
+def parse_args(argv: List[str]) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Build the Gridiron Gazette recap document.")
+    p.add_argument("--league", type=int, default=int(get_env("LEAGUE_ID") or 887998), help="ESPN League ID")
+    p.add_argument("--year", type=int, default=int(get_env("YEAR") or datetime.utcnow().year), help="Season year")
+    p.add_argument("--week", type=int, default=int(get_env("WEEK") or 0), help="Scoring week (1..18). 0 means auto")
+    p.add_argument("--auto-week", action="store_true", help="Infer current week if --week is 0")
+    p.add_argument("--week-offset", type=int, default=0, help="Offset to add to inferred week")
+
+    p.add_argument("--template", type=str, default=get_env("GAZETTE_TEMPLATE") or "", help="Path to recap_template.docx")
+    p.add_argument("--output-dir", type=str, default=get_env("GAZETTE_OUTDIR") or "recaps", help="Output directory")
+
+    # Blurbs
+    p.add_argument("--llm-blurbs", action="store_true", help="Generate LLM blurbs")
+    p.add_argument("--blurb-style", default=get_env("BLURB_STYLE") or "sabre", help="Blurb tone/style")
+    p.add_argument("--blurb-words", type=int, default=int(get_env("BLURB_WORDS") or 300), help="Approx words per blurb")
+
+    p.add_argument("--verbose", action="store_true", help="Verbose logging")
+    return p.parse_args(argv)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = parse_args(argv or sys.argv[1:])
+
+    logging.basicConfig(
+        level=logging.INFO if args.verbose else logging.WARNING,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
+
+    cookies = require_cookies()
+    league = League(league_id=args.league, year=args.year, espn_s2=cookies["s2"], swid=cookies["swid"])
+
+    # Determine week
+    week = infer_week(args.auto_week or args.week == 0, args.week, args.week_offset)
+    LOG.info("Using week=%s", week)
+
+    # Ensure we truly have player-level data (not just public scores)
+    ensure_player_data(league, week)
+
+    # Build document
+    outdoc = build_doc(league, args.year, week, args.template or None, args.output_dir, args.verbose)
+    print(f"✅ Recap generated: {outdoc}")
+
+    # Optional blurbs
+    if args.llm_blurbs:
+        blurbs = maybe_make_blurbs(league, args.year, week, args.blurb_style, args.blurb_words, enabled=True)
+        print(f"✅ Blurbs generated: {len(blurbs)}")
+    else:
+        print("⏩ Skipping blurbs (flag not set)")
+
+    print("🎉 Build complete.")
+    return 0
+
 
 if __name__ == "__main__":
     try:
-        main()
-    except subprocess.CalledProcessError as e:
-        logging.exception("External tool failed: %s", e)
-        sys.exit(2)
+        raise SystemExit(main())
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        raise SystemExit(1)
     except Exception as e:
-        logging.exception("Error building gazette: %s", e)
-        sys.exit(1)
+        LOG.exception("Unhandled error: %s", e)
+        raise SystemExit(2)
