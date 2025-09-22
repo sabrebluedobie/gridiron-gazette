@@ -21,6 +21,16 @@ from assets_fix import (
 )
 from footer_gradient import add_footer_gradient
 
+def _mask(s: str) -> str:
+    return f"{len(s)} chars" if s else "MISSING"
+
+s2 = os.getenv("ESPN_S2", "")
+swid = os.getenv("SWID", "")
+print(f"[preflight] ESPN_S2: {_mask(s2)}, SWID: {_mask(swid)}")
+if not s2 or not swid:
+    raise SystemExit("Missing ESPN auth cookies in environment. Set ESPN_S2 and SWID in the GitHub environment and job env.")
+
+
 # ---------------------- Configuration ----------------------
 DEFAULT_TEMPLATE = "recap_template.docx"
 DEFAULT_OUTDIR   = "recaps"
