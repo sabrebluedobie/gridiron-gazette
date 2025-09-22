@@ -16,7 +16,8 @@ from docx import Document
 from docx.shared import Mm
 
 from assets_fix import (
-    find_team_logo, find_league_logo, debug_log_logo, validate_logo_map
+    find_team_logo, find_league_logo, debug_log_logo, 
+    find_logo_by_name, validate_logo_map
 )
 from footer_gradient import add_footer_gradient
 
@@ -233,6 +234,18 @@ def main():
 
         # 2) Render DOCX
         doc = DocxTemplate(str(template_path))
+
+        # League Logo (e.g., "Browns SEA/KC")
+        league_display = ctx.get("LEAGUE_LOGO_NAME") or ctx.get("LEAGUE_NAME")
+        if league_display:
+            debug_log_logo(league_display, kind="league")
+            league_logo_path = find_league_logo(league_display)
+            ctx["LEAGUE_LOGO"] = InlineImage(doc, str(league_logo_path), width=Mm(26))
+
+        # Sponsor Logo
+        sponsor_logo = find_logo_by_name("SPONSOR_LOGO")  # Ensure it's added to team_logos.json
+        ctx["SPONSOR_LOGO"] = InlineImage(doc, str(sponsor_logo), width=Mm(50))  # adjust width as needed
+
         ctx = attach_logos(doc, ctx)      # inject InlineImage fields
         doc.render(ctx)
         doc.save(str(docx_path))
