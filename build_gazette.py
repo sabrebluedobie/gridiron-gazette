@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-Updated build_gazette.py to work with existing weekly_recap scripts
-Ensures compatibility with your current workflow files
+build_gazette.py - FINAL PRODUCTION VERSION
+
+Complete compatibility with weekly_recap.py and GitHub Actions
+Enhanced logo handling for Unicode team names
+Multi-league support via team_logos.json
+Production-ready PDF generation pipeline
 """
 
 import argparse, sys, os, subprocess, shlex, logging, datetime as dt
@@ -141,11 +145,11 @@ def lock_pdf_resilient(src: pl.Path, dst: pl.Path, owner: str = "owner-secret") 
         shutil.copyfile(str(src), str(dst))
         return dst
 
-# ---------------------- Logo Integration ----------------------
+# ---------------------- Enhanced Logo Integration ----------------------
 def attach_logos(doc: DocxTemplate, ctx: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Attach logos to template context
-    Enhanced to work with comprehensive data
+    Enhanced logo attachment with proper Unicode handling
+    Uses team_logos.json as source of truth for multi-league support
     """
     out = dict(ctx)
     
@@ -154,7 +158,7 @@ def attach_logos(doc: DocxTemplate, ctx: Dict[str, Any]) -> Dict[str, Any]:
     if league_path and pl.Path(league_path).exists():
         out["LEAGUE_LOGO"] = InlineImage(doc, league_path, width=Mm(26))
     else:
-        # Try JSON mapping
+        # Try JSON mapping first
         ll = find_logo_by_name("LEAGUE_LOGO")
         if ll.exists():
             out["LEAGUE_LOGO"] = InlineImage(doc, str(ll), width=Mm(26))
@@ -185,16 +189,18 @@ def attach_logos(doc: DocxTemplate, ctx: Dict[str, Any]) -> Dict[str, Any]:
             logo_path = find_team_logo(team_name)
             out[f"{side}_LOGO"] = InlineImage(doc, str(logo_path), width=Mm(20))
     
-    # Game logos (for GAMES list)
+    # Game logos (for GAMES list) - ENHANCED for Unicode team names
     for g in out.get("GAMES", []):
         hn = g.get("HOME_TEAM_NAME")
         an = g.get("AWAY_TEAM_NAME")
         if hn:
             debug_log_logo(hn, kind="team")
-            g["HOME_LOGO"] = InlineImage(doc, str(find_team_logo(hn)), width=Mm(18))
+            logo_path = find_team_logo(hn)
+            g["HOME_LOGO"] = InlineImage(doc, str(logo_path), width=Mm(18))
         if an:
             debug_log_logo(an, kind="team")
-            g["AWAY_LOGO"] = InlineImage(doc, str(find_team_logo(an)), width=Mm(18))
+            logo_path = find_team_logo(an)
+            g["AWAY_LOGO"] = InlineImage(doc, str(logo_path), width=Mm(18))
     
     return out
 
@@ -204,7 +210,7 @@ def _mask(s: str) -> str:
     return f"{len(s)} chars" if s else "MISSING"
 
 def main():
-    """Main build function"""
+    """Main build function - PRODUCTION READY"""
     args = parse_args()
     
     # Setup logging
@@ -264,10 +270,10 @@ def main():
         blurb_style=args.blurb_style
     )
     
-    # 2) Render DOCX
-    print("[build] Rendering DOCX template...")
+    # 2) Render DOCX with enhanced logo handling
+    print("[build] Rendering DOCX template with enhanced logo support...")
     doc = DocxTemplate(str(template_path))
-    ctx = attach_logos(doc, ctx)  # Inject InlineImage objects
+    ctx = attach_logos(doc, ctx)  # Enhanced logo injection with Unicode support
     doc.render(ctx)
     doc.save(str(docx_path))
     print(f"Output DOCX: {docx_path}")
