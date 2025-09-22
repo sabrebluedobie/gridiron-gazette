@@ -40,15 +40,12 @@ def espn_get(url: str, params: dict | None = None, timeout: int = 30) -> request
 def load_scoreboard(league_id: str, year: int, week: int) -> Dict[str, Any]:
     """
     Pull a minimal set of matchup data. If auth or API fails, return a stub.
-    Endpoint: v3 games ffl (matchup scores)
     """
     base = f"https://fantasy.espn.com/apis/v3/games/ffl/seasons/{year}/segments/0/leagues/{league_id}"
-    params = {
-        "scoringPeriodId": week,
-        "view": "mMatchupScore",
-    }
+    params = {"scoringPeriodId": week, "view": "mMatchupScore"}
     try:
         r = espn_get(base, params=params)
+        print(f"[espn] GET {r.url} -> {r.status_code}")
         if r.status_code != 200:
             print(f"[espn] HTTP {r.status_code} fetching scoreboard; falling back.")
             return {"games": []}
@@ -57,32 +54,44 @@ def load_scoreboard(league_id: str, year: int, week: int) -> Dict[str, Any]:
         print(f"[espn] Exception fetching scoreboard: {e}; falling back.")
         return {"games": []}
 
-    # Parse teams
-    id_to_team: Dict[int, Dict[str, Any]] = {}
-    for t in data.get("teams", []):
-        tm_name = t.get("location", "") + " " + t.get("nickname", "")
-        id_to_team[t.get("id")] = {"name": tm_name.strip()}
+    teams = data.get("teams", []) or []
+    sched = data.get("schedule", []) or []
+    print(f"[espn] teams={len(teams)} schedule={len(sched)} week={week}")
 
-    # Parse schedule -> list of games
+    # id -> friendly name
+    id_to_team: Dict[int, Dict[str, Any]] = {}
+    for t in teams:
+        tid = t.get("id")
+        loc = (t.get("location") or "").strip()
+        nick = (t.get("nickname") or "").strip()
+        nm = (loc + " " + nick).strip() or f"Team {tid}"
+        if tid is not None:
+            id_to_team[tid] = {"name": nm}
+
     games: List[Dict[str, Any]] = []
-    for m in data.get("schedule", []):
-        home_id = m.get("home", {}).get("teamId")
-        away_id = m.get("away", {}).get("teamId")
-        if not home_id or not away_id:
+    for m in sched:
+        h = (m.get("home") or {})
+        a = (m.get("away") or {})
+        home_id = h.get("teamId")
+        away_id = a.get("teamId")
+        if home_id is None or away_id is None:
             continue
         home = id_to_team.get(home_id, {"name": f"Team {home_id}"})
         away = id_to_team.get(away_id, {"name": f"Team {away_id}"})
-        hs = m.get("home", {}).get("totalPoints", 0)
-        as_ = m.get("away", {}).get("totalPoints", 0)
+        hs = h.get("totalPoints", 0)
+        as_ = a.get("totalPoints", 0)
+        def fmt(x): 
+            return f"{x:.1f}" if isinstance(x, (int,float)) else str(x or "0.0")
         games.append({
             "HOME_TEAM_NAME": home["name"],
             "AWAY_TEAM_NAME": away["name"],
-            "HOME_SCORE": f"{hs:.1f}" if isinstance(hs, (int, float)) else str(hs),
-            "AWAY_SCORE": f"{as_:.1f}" if isinstance(as_, (int, float)) else str(as_),
-            "RECAP": "",  # can be filled by LLM later
+            "HOME_SCORE": fmt(hs),
+            "AWAY_SCORE": fmt(as_),
+            "RECAP": "",
         })
 
     return {"games": games}
+
 
 # --------------- Context builder -----------------
 def assemble_context(
@@ -109,6 +118,8 @@ def assemble_context(
     else:
         # minimal stub if no games
         home, away = "Nana's Hawks", "Phoenix Blues"
+    
+    print(f"[ctx] games={len(games)} chosen-top={home} vs {away}")
 
     ctx: Dict[str, Any] = {
         "LEAGUE_NAME": league_display_name,

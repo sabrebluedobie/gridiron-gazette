@@ -45,10 +45,33 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--verbose", action="store_true")
     return p.parse_args()
 
-def compute_auto_week(offset: int = 0) -> int:
-    today = dt.date.today()
-    wk = int(today.strftime("%U"))
-    return max(1, wk + offset)
+# --- replace the old compute_auto_week with this ---
+def compute_fantasy_week(offset: int = 0) -> int:
+    """
+    Fantasy week = 1 + whole weeks since season start.
+    Season start comes from env FANTASY_SEASON_START=YYYY-MM-DD (Tuesday works well),
+    else we default to first Tuesday in September of the given YEAR if provided later.
+    """
+    import datetime as _dt
+
+    # Prefer explicit env (lets you set different for each season)
+    s = os.getenv("FANTASY_SEASON_START", "").strip()
+    if s:
+        season_start = _dt.date.fromisoformat(s)
+    else:
+        # fallback: first Tuesday in September of THIS YEAR
+        today = _dt.date.today()
+        y = today.year
+        sept1 = _dt.date(y, 9, 1)
+        # weekday(): Mon=0..Sun=6; we want Tue=1
+        delta = (1 - sept1.weekday()) % 7
+        season_start = sept1 + _dt.timedelta(days=delta)
+
+    today = _dt.date.today()
+    days = (today - season_start).days
+    base_week = 1 if days < 0 else 1 + (days // 7)
+    return max(1, base_week + offset)
+
 
 # ---------------------- Converters -------------------------
 def docx_to_pdf(docx_path: pl.Path, out_dir: pl.Path | None = None) -> pl.Path:
@@ -166,7 +189,7 @@ def main():
     args = parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(levelname)s %(message)s")
-    week = args.week if not args.auto_week else compute_auto_week(args.week_offset)
+    week = args.week if not args.auto_week else compute_fantasy_week(args.week_offset)
 
     print("=== Build Configuration ===")
     print(f"Environment: {os.getenv('GITHUB_ENV', 'local') and 'actions' or 'local'}")
