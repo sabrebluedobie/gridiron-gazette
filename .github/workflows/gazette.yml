@@ -39,16 +39,17 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     env:
-      LEAGUE_ID: ${{ secrets.LEAGUE_ID }}
-      ESPN_S2:   ${{ secrets.ESPN_S2 }}
-      SWID:      ${{ secrets.SWID }}
+      # These pull from repository secrets
+      LEAGUE_ID: ${{ vars.LEAGUE_ID }}
+      ESPN_S2: ${{ secrets.ESPN_S2 }}
+      SWID: ${{ secrets.SWID }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      
     name: Load and build Gazette
     steps:
-      # 1) Checkout the repo
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2) Python + venv
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -61,7 +62,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 3) System tools for DOCX->PDF->PDF/A and fonts
       - name: Install LibreOffice, Ghostscript, and fonts
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -71,40 +71,30 @@ jobs:
             fonts-inter fonts-dejavu fonts-liberation fonts-noto-core
           fc-cache -f -v
 
-      # Optional: install project-bundled fonts from repo (if you keep TTFs under fonts/**)
-      - name: Install project-bundled fonts (optional)
+      - name: Verify environment
         run: |
-          mkdir -p ~/.local/share/fonts
-          if compgen -G "fonts/**/*.ttf" > /dev/null || compgen -G "fonts/**/*.otf" > /dev/null; then
-            find fonts -type f \( -iname "*.ttf" -o -iname "*.otf" \) -print -exec cp {} ~/.local/share/fonts/ \;
-            fc-cache -f -v
-          fi
+          echo "Checking environment variables..."
+          echo "LEAGUE_ID: ${{ vars.LEAGUE_ID }}"
+          echo "ESPN_S2 length: ${#ESPN_S2}"
+          echo "SWID: $SWID"
+          echo "OpenAI API Key set: $(test -n "$OPENAI_API_KEY" && echo 'yes' || echo 'no')"
 
-      - name: Verify LibreOffice
-        run: |
-          which soffice
-          soffice --version
-
-      # 4) Build
       - name: Run Gazette build
-        env:
-            # Put your league ID (and any API keys) in repo Secrets
-            LEAGUE_ID: ${{ secrets.LEAGUE_ID }}
         run: |
           set -e
           source .venv/bin/activate
 
-          # Inputs → flags
+          # Determine week
           WEEK_FLAG=""
           if [ "${{ github.event.inputs.auto_week || 'true' }}" = "true" ]; then
             WEEK_FLAG="--auto-week"
           else
-            # fallback to provided week or 1 if empty
             W="${{ github.event.inputs.week }}"
             if [ -z "$W" ]; then W="1"; fi
             WEEK_FLAG="--week $W"
           fi
 
+          # LLM flag
           LLM_FLAG=""
           if [ "${{ github.event.inputs.llm_blurbs || 'true' }}" = "true" ]; then
             LLM_FLAG="--llm-blurbs"
@@ -118,9 +108,10 @@ jobs:
           echo "Auto-week: $([ "${{ github.event.inputs.auto_week || 'true' }}" = "true" ] && echo yes || echo no)"
           echo "LLM Blurbs: $([ "${{ github.event.inputs.llm_blurbs || 'true' }}" = "true" ] && echo yes || echo no)"
           echo "Blurb Style: $BLURB_STYLE"
+          echo "League ID: $LEAGUE_ID"
           echo
 
-          # Single or multi run
+          # Run the build
           if [ "$MODE" = "single" ]; then
             python build_gazette.py \
               --league-id "$LEAGUE_ID" \
@@ -130,7 +121,6 @@ jobs:
               --blurb-style "$BLURB_STYLE" \
               --output-dir recaps
           else
-            # Example multi runner (adjust to your script if different)
             python weekly_recap_multi.py \
               $WEEK_FLAG \
               $LLM_FLAG \
@@ -138,7 +128,6 @@ jobs:
               --output-dir recaps
           fi
 
-      # 5) Upload artifacts
       - name: Upload recaps
         uses: actions/upload-artifact@v4
         with:
