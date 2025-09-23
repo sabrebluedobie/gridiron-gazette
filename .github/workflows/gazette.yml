@@ -6,11 +6,14 @@ on:
       week:
         description: "Override week (optional)"
         required: false
-        default: ""
+        default: "2"
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # If your secrets live in an Environment, uncomment & set name:
+    environment:
+      name: Production
 
     steps:
       - name: Checkout
@@ -30,25 +33,17 @@ jobs:
           fi
           pip install espn-api docxtpl python-docx python-dotenv pyyaml openai requests
 
-      # Export Secrets & Variables if present (no linter warnings)
       - name: Export repo Secrets & Variables to $GITHUB_ENV
         run: |
-          # Secrets (write whatever exists)
           echo "ESPN_S2=${{ secrets.ESPN_S2 }}" >> "$GITHUB_ENV"
-          # Prefer SWID, but fall back to ESPN_SWID if that’s what you stored
-          swid="${{ secrets.SWID }}"
-          if [ -z "$swid" ]; then swid="${{ secrets.ESPN_SWID }}"; fi
-          echo "SWID=$swid" >> "$GITHUB_ENV"
+          echo "SWID=${{ secrets.SWID }}" >> "$GITHUB_ENV"
           echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> "$GITHUB_ENV"
-
-          # Variables (may be unset; we’ll fill from YAML later)
           echo "LEAGUE_ID=${{ vars.LEAGUE_ID }}" >> "$GITHUB_ENV"
           echo "YEAR=${{ vars.YEAR }}" >> "$GITHUB_ENV"
           echo "TEMPLATE=${{ vars.TEMPLATE }}" >> "$GITHUB_ENV"
           echo "OUTDOCX=${{ vars.OUTDOCX }}" >> "$GITHUB_ENV"
           echo "FANTASY_SEASON_START=${{ secrets.FANTASY_SEASON_START }}" >> "$GITHUB_ENV"
 
-      # Fill any missing env from gazette.yml (root) without leaking secrets
       - name: Fill missing env from gazette.yml
         run: |
           python - <<'PY'
@@ -59,15 +54,10 @@ jobs:
               if v is None: return
               with open(os.environ['GITHUB_ENV'], 'a') as f:
                   print(f"{k}={v}", file=f)
-          # only write if missing/empty in env
-          if not os.getenv('LEAGUE_ID') and cfg.get('league_id') is not None:
-              put('LEAGUE_ID', cfg.get('league_id'))
-          if not os.getenv('YEAR') and cfg.get('year') is not None:
-              put('YEAR', cfg.get('year'))
-          if not os.getenv('TEMPLATE') and cfg.get('template'):
-              put('TEMPLATE', cfg.get('template'))
-          if not os.getenv('OUTDOCX') and cfg.get('output_dir'):
-              put('OUTDOCX', cfg.get('output_dir'))
+          if not os.getenv('LEAGUE_ID') and cfg.get('league_id') is not None: put('LEAGUE_ID', cfg['league_id'])
+          if not os.getenv('YEAR') and cfg.get('year') is not None: put('YEAR', cfg['year'])
+          if not os.getenv('TEMPLATE') and cfg.get('template'): put('TEMPLATE', cfg['template'])
+          if not os.getenv('OUTDOCX') and cfg.get('output_dir'): put('OUTDOCX', cfg['output_dir'])
           PY
 
       - name: Preflight (sanity print, no secrets)
@@ -78,34 +68,23 @@ jobs:
           cfg = yaml.safe_load(p.read_text()) if p.exists() else {}
           def safe(v): return f"present(len={len(v)})" if v else "missing"
           print("YAML present:", p.exists())
-          for k in ['league_id','year','week','template','output_dir','blurb_style','blurb_words','llm_blurbs']:
-              print(f"{k}: {cfg.get(k)}")
-          print("ESPN_S2:", safe(os.environ.get('ESPN_S2')))
-          print("SWID:", safe(os.environ.get('SWID')))
-          print("OPENAI_API_KEY:", safe(os.environ.get('OPENAI_API_KEY')))
           print("LEAGUE_ID:", os.environ.get('LEAGUE_ID'))
           print("YEAR:", os.environ.get('YEAR'))
           print("TEMPLATE:", os.environ.get('TEMPLATE'))
           print("OUTDOCX:", os.environ.get('OUTDOCX'))
-          print("FANTASY_SEASON_START:", os.environ.get('FANTASY_SEASON_START'))
+          print("ESPN_S2:", safe(os.environ.get('ESPN_S2')))
+          print("SWID:", safe(os.environ.get('SWID')))
+          print("OPENAI_API_KEY:", safe(os.environ.get('OPENAI_API_KEY')))
           PY
 
       - name: Run Gazette build
         run: |
           set -euo pipefail
-
-          # Safe defaults in shell
           : "${TEMPLATE:=recap_template.docx}"
           : "${OUTDOCX:=recaps}"
           : "${YEAR:=2025}"
-
           PY_ARGS=()
-          # Optional workflow input to override week
-          if [ -n "${{ github.event.inputs.week }}" ]; then
-            PY_ARGS+=(--week "${{ github.event.inputs.week }}")
-          fi
-
-          # Let build_gazette.py fall back to YAML if LEAGUE_ID wasn’t set
+          if [ -n "${{ github.event.inputs.week }}" ]; then PY_ARGS+=(--week "${{ github.event.inputs.week }}"); fi
           python build_gazette.py --llm-blurbs --verbose "${PY_ARGS[@]}"
 
       - name: Upload Gazette artifact
