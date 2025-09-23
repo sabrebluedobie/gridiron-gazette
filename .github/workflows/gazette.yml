@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       week:
-        description: "Week number (leave blank to use auto/week from CLI)"
+        description: "Week number (optional)"
         required: false
         default: ""
 
@@ -12,27 +12,25 @@ permissions:
   contents: write
 
 env:
-  # Secrets (set in repo Settings → Secrets and variables → Actions → Secrets)
+  # Secrets (repo Settings → Secrets and variables → Actions → Secrets)
   ESPN_S2: ${{ secrets.ESPN_S2 }}
-  SWID: ${{ secrets.SWID }}
+  SWID: ${{ secrets.SWID }}                 # secret VALUE must include braces, e.g. {xxxxxxxx-...}
 
-  # Variables (set in repo Settings → Secrets and variables → Actions → Variables)
-  LEAGUE_ID: ${{ vars.LEAGUE_ID }}
-  YEAR: ${{ vars.YEAR }}
-  TEMPLATE: ${{ vars.TEMPLATE }}
-  OUTDOCX: ${{ vars.OUTDOCX }}
-  TEAM_LOGOS_FILE: ${{ vars.TEAM_LOGOS_FILE }}
+  # Variables (repo Settings → Secrets and variables → Actions → Variables)
+  LEAGUE_ID: ${{ vars.LEAGUE_ID }}          # e.g., 887998
+  YEAR: ${{ vars.YEAR }}                    # e.g., 2025
+  TEMPLATE: ${{ vars.TEMPLATE }}            # e.g., recap_template.docx
+  OUTDOCX: ${{ vars.OUTDOCX }}              # e.g., recaps/Week{week}_Gazette.docx
+  TEAM_LOGOS_FILE: ${{ vars.TEAM_LOGOS_FILE }}  # e.g., team_logos.json
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -41,24 +39,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Preflight env check (safe)
+      - name: Preflight (no secrets leak; fails if misconfigured)
+        env:
+          WEEK_INPUT: ${{ github.event.inputs.week }}
         run: |
-          python - <<'PY'
-          import os
-          def safe(v): 
-              return "missing" if not v else f"present(len={len(v)})"
-          print("ESPN_S2:", safe(os.getenv("ESPN_S2")))
-          print("SWID:", safe(os.getenv("SWID")))
-          print("LEAGUE_ID:", os.getenv("LEAGUE_ID"))
-          print("YEAR:", os.getenv("YEAR"))
-          print("TEMPLATE:", os.getenv("TEMPLATE"))
-          print("OUTDOCX:", os.getenv("OUTDOCX"))
-          print("TEAM_LOGOS_FILE:", os.getenv("TEAM_LOGOS_FILE"))
-          PY
+          set -euo pipefail
+          python espn_preflight.py
 
       - name: Build Gazette
         env:
-          # ensure week input flows to the script if provided
           WEEK_INPUT: ${{ github.event.inputs.week }}
         run: |
           set -euo pipefail
@@ -68,10 +57,8 @@ jobs:
           fi
           python build_gazette.py --llm-blurbs --verbose "${PY_ARGS[@]}"
 
-      # Optional: upload artifact
-      - name: Upload recap docx
+      - name: Upload recap
         uses: actions/upload-artifact@v4
         with:
           name: gazette-output
-          path: |
-            recaps/*.docx
+          path: recaps/*.docx
