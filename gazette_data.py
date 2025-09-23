@@ -24,8 +24,35 @@ def _read_cookie_pair() -> Tuple[Optional[str], Optional[str]]:
 
 def get_league(league_id: int, year: int) -> League:
     s2, swid = _read_cookie_pair()
-    # Let this raise if truly missing; caller can catch and fallback
     return League(league_id=league_id, year=year, espn_s2=s2, swid=swid)
+
+def _safe_float(x) -> float:
+    try:
+        return float(x)
+    except Exception:
+        return 0.0
+
+def _safe_settings_name(league: League) -> Optional[str]:
+    """
+    espn_api can expose settings as a dict or an object.
+    Try, in order: league.settings.name -> league.settings["name"] -> league.league_name
+    """
+    try:
+        s = getattr(league, "settings", None)
+        if s is not None:
+            # object-style
+            name = getattr(s, "name", None)
+            if name:
+                return name
+            # dict-style
+            if isinstance(s, dict):
+                name = s.get("name")
+                if name:
+                    return name
+    except Exception:
+        pass
+    # Older versions sometimes expose league.league_name
+    return getattr(league, "league_name", None)
 
 # ---------------------------
 # Data structures
@@ -60,12 +87,6 @@ class Awards:
 # Fetch week & compute stats
 # ---------------------------
 
-def _safe_float(x) -> float:
-    try:
-        return float(x)
-    except Exception:
-        return 0.0
-
 def fetch_week_from_espn(league: League, week: int) -> List[MatchupRow]:
     """Fetch scoreboard for week and return normalized rows."""
     rows: List[MatchupRow] = []
@@ -75,16 +96,23 @@ def fetch_week_from_espn(league: League, week: int) -> List[MatchupRow]:
         away_team = m.away_team
         hs = _safe_float(m.home_score)
         as_ = _safe_float(m.away_score)
+        # abbrev attribute naming varies by version
+        def _abbr(t):
+            return (
+                getattr(t, "abbrev", None)
+                or getattr(t, "team_abbrev", None)
+                or ""
+            )
         rows.append(
             MatchupRow(
                 home=TeamGame(
                     name=home_team.team_name,
-                    abbrev=getattr(home_team, "abbrev", home_team.team_abbrev) if hasattr(home_team, "abbrev") else getattr(home_team, "team_abbrev", ""),
+                    abbrev=_abbr(home_team),
                     score=hs,
                 ),
                 away=TeamGame(
                     name=away_team.team_name,
-                    abbrev=getattr(away_team, "abbrev", away_team.team_abbrev) if hasattr(away_team, "abbrev") else getattr(away_team, "team_abbrev", ""),
+                    abbrev=_abbr(away_team),
                     score=as_,
                 ),
                 margin=abs(hs - as_)
@@ -102,22 +130,22 @@ def enrich_with_player_tops(league: League, week: int, rows: List[MatchupRow]) -
     except Exception:
         return
 
-    # Build map: team_id -> (player_name, points)
-    # espn_api 0.45 returns BoxScore with home_lineup / away_lineup of PlayerSlot objects
-    # Each slot has .points and .playerName (on .playerName or .name depending on version)
     def best_from_lineup(lineup) -> Tuple[Optional[str], Optional[float]]:
         best_n, best_p = None, None
         for slot in lineup or []:
             pts = _safe_float(getattr(slot, "points", 0.0))
-            # name attr can differ by version
-            nm = getattr(slot, "name", None) or getattr(getattr(slot, "player", None), "name", None) or getattr(slot, "playerName", None)
+            nm = (
+                getattr(slot, "name", None)
+                or getattr(getattr(slot, "player", None), "name", None)
+                or getattr(slot, "playerName", None)
+            )
             if nm is None:
                 continue
             if best_p is None or pts > best_p:
                 best_p, best_n = pts, nm
         return best_n, best_p
 
-    # Match BoxScore objects to our rows by team name (robust for custom team names)
+    # Match BoxScore objects to our rows by team name
     for bs in box:
         h_name = getattr(bs.home_team, "team_name", "")
         a_name = getattr(bs.away_team, "team_name", "")
@@ -175,21 +203,24 @@ def build_context(league_id: int, year: int, week: int) -> Dict[str, Any]:
     ctx["LEAGUE_ID"] = league_id
     ctx["YEAR"] = year
     ctx["WEEK_NUMBER"] = week
-    ctx["LEAGUE_NAME"] = getattr(league, "settings", {}).get("name", None) or getattr(league, "league_name", None) or "League"
+
+    # FIX: support object or dict settings
+    league_name = _safe_settings_name(league) or "League"
+    ctx["LEAGUE_NAME"] = league_name
 
     # Per-matchup fields, 1-based up to 7 just in case
     for i, r in enumerate(rows, start=1):
-        # Team names and scores
         ctx[f"MATCHUP{i}_HOME"] = r.home.name
         ctx[f"MATCHUP{i}_AWAY"] = r.away.name
         ctx[f"MATCHUP{i}_HS"]   = _fmt_pts(r.home.score)
         ctx[f"MATCHUP{i}_AS"]   = _fmt_pts(r.away.score)
-        # Top scorers (various aliases your template may use)
+
         ctx[f"MATCHUP{i}_HOME_TOP_SCORER"] = r.home.top_scorer_name or ""
         ctx[f"MATCHUP{i}_HOME_TOP_POINTS"] = _fmt_pts(r.home.top_scorer_pts) or ""
         ctx[f"MATCHUP{i}_AWAY_TOP_SCORER"] = r.away.top_scorer_name or ""
         ctx[f"MATCHUP{i}_AWAY_TOP_POINTS"] = _fmt_pts(r.away.top_scorer_pts) or ""
-        # Older/alternate keys seen in some templates
+
+        # Aliases for older templates
         ctx[f"MATCHUP{i}_TOP_SCORER_HOME"] = ctx[f"MATCHUP{i}_HOME_TOP_SCORER"]
         ctx[f"MATCHUP{i}_TOP_SCORER_AWAY"] = ctx[f"MATCHUP{i}_AWAY_TOP_SCORER"]
         ctx[f"MATCHUP{i}_TOP_POINTS_HOME"] = ctx[f"MATCHUP{i}_HOME_TOP_POINTS"]
@@ -197,16 +228,14 @@ def build_context(league_id: int, year: int, week: int) -> Dict[str, Any]:
 
     # Awards
     awd = compute_awards(rows)
-    # Primary keys
-    ctx["AWARD_CUPCAKE_TEAM"]   = awd.cupcake_team or ""
-    ctx["AWARD_CUPCAKE_SCORE"]  = _fmt_pts(awd.cupcake_score) or ""
-    ctx["AWARD_KITTY_LOSER"]    = awd.kitty_loser or ""
-    ctx["AWARD_KITTY_WINNER"]   = awd.kitty_winner or ""
-    ctx["AWARD_KITTY_GAP"]      = _fmt_pts(awd.kitty_gap) or ""
-    ctx["AWARD_TOPSCORE_TEAM"]  = awd.top_team or ""
-    ctx["AWARD_TOPSCORE_POINTS"]= _fmt_pts(awd.top_score) or ""
+    ctx["AWARD_CUPCAKE_TEAM"]    = awd.cupcake_team or ""
+    ctx["AWARD_CUPCAKE_SCORE"]   = _fmt_pts(awd.cupcake_score) or ""
+    ctx["AWARD_KITTY_LOSER"]     = awd.kitty_loser or ""
+    ctx["AWARD_KITTY_WINNER"]    = awd.kitty_winner or ""
+    ctx["AWARD_KITTY_GAP"]       = _fmt_pts(awd.kitty_gap) or ""
+    ctx["AWARD_TOPSCORE_TEAM"]   = awd.top_team or ""
+    ctx["AWARD_TOPSCORE_POINTS"] = _fmt_pts(awd.top_score) or ""
 
-    # Friendly, ready-to-render lines (cover the em-dash slots your DOCX shows)
     ctx["CUPCAKE_LINE"] = (f"{ctx['AWARD_CUPCAKE_TEAM']} — {ctx['AWARD_CUPCAKE_SCORE']}"
                            if ctx["AWARD_CUPCAKE_TEAM"] else "—")
     ctx["KITTY_LINE"]    = (f"{ctx['AWARD_KITTY_LOSER']} — {ctx['AWARD_KITTY_GAP']}"
