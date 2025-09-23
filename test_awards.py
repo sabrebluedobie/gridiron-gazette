@@ -54,7 +54,7 @@ def test_awards_with_sample_data():
     print("=" * 50)
     
     # Test the awards calculation function
-    from updated_weekly_recap import calculate_weekly_awards_fixed
+    from weekly_recap import calculate_weekly_awards_fixed
     
     awards = calculate_weekly_awards_fixed(sample_games)
     
@@ -158,7 +158,7 @@ def test_with_real_api(league_id, year, week):
             print(f"  Game {i}: {home_team} ({home_score}) vs {away_team} ({away_score})")
         
         # Test awards calculation with real data
-        from updated_weekly_recap import calculate_weekly_awards_fixed
+        from weekly_recap import calculate_weekly_awards_fixed
         awards = calculate_weekly_awards_fixed(games)
         
         print(f"\n🏆 REAL DATA AWARDS:")

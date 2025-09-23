@@ -13,7 +13,7 @@ try:
 except Exception:
     pass
 
-import updated_weekly_recap as weekly_recap  # or: import weekly_recap
+import weekly_recap as weekly_recap  # or: import weekly_recap
 # If you kept the file name `weekly_recap.py`, use: import weekly_recap
 
 log = logging.getLogger("build_gazette")

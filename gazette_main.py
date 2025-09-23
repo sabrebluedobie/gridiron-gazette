@@ -137,11 +137,11 @@ def build_gazette(league_id: str, year: int, week: int,
         
         # Try to use enhanced weekly_recap if available
         try:
-            from updated_weekly_recap import build_weekly_recap
+            from weekly_recap import build_weekly_recap
             logger.info("Using enhanced weekly recap builder")
         except ImportError:
             # Fall back to original
-            from updated_weekly_recap import build_weekly_recap
+            from weekly_recap import build_weekly_recap
             logger.info("Using original weekly recap builder")
         
         # Build the recap
