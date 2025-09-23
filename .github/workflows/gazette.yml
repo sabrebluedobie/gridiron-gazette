@@ -4,14 +4,43 @@ on:
   workflow_dispatch:
     inputs:
       week:
-        description: "Override week (optional)"
+        description: "Week number to build (leave empty for auto-detect)"
         required: false
-        default: "2"
+        type: string
+      mode:
+        description: "Build mode"
+        required: false
+        default: "normal"
+        type: choice
+        options:
+          - "normal"
+          - "debug" 
+          - "test-api"
+          - "batch"
+      llm_blurbs:
+        description: "Generate LLM-powered blurbs"
+        required: false
+        default: true
+        type: boolean
+      blurb_style:
+        description: "Blurb style (if using LLM)"
+        required: false
+        default: "sabre"
+        type: choice
+        options:
+          - "sabre"
+          - "casual"
+          - "professional"
+          - "humorous"
+      batch_weeks:
+        description: "Weeks to build (comma-separated, for batch mode)"
+        required: false
+        type: string
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # If your secrets live in an Environment, uncomment & set name:
+    timeout-minutes: 20
     environment:
       name: Production
 
@@ -31,9 +60,14 @@ jobs:
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           fi
+          # Install core dependencies
           pip install espn-api docxtpl python-docx python-dotenv pyyaml openai requests
+          # Install enhanced error handling dependencies
+          pip install retrying tenacity colorlog python-json-logger
+          # Install Pillow for default logo creation
+          pip install Pillow
 
-      - name: Export repo Secrets & Variables to $GITHUB_ENV
+      - name: Export secrets and variables
         run: |
           echo "ESPN_S2=${{ secrets.ESPN_S2 }}" >> "$GITHUB_ENV"
           echo "SWID=${{ secrets.SWID }}" >> "$GITHUB_ENV"
@@ -54,44 +88,394 @@ jobs:
               if v is None: return
               with open(os.environ['GITHUB_ENV'], 'a') as f:
                   print(f"{k}={v}", file=f)
-          if not os.getenv('LEAGUE_ID') and cfg.get('league_id') is not None: put('LEAGUE_ID', cfg['league_id'])
-          if not os.getenv('YEAR') and cfg.get('year') is not None: put('YEAR', cfg['year'])
-          if not os.getenv('TEMPLATE') and cfg.get('template'): put('TEMPLATE', cfg['template'])
-          if not os.getenv('OUTDOCX') and cfg.get('output_dir'): put('OUTDOCX', cfg['output_dir'])
+          
+          # Fill missing values from config
+          if not os.getenv('LEAGUE_ID') and cfg.get('league_id') is not None: 
+              put('LEAGUE_ID', cfg['league_id'])
+          if not os.getenv('YEAR') and cfg.get('year') is not None: 
+              put('YEAR', cfg['year'])
+          if not os.getenv('TEMPLATE') and cfg.get('template'): 
+              put('TEMPLATE', cfg['template'])
+          if not os.getenv('OUTDOCX') and cfg.get('output_dir'): 
+              put('OUTDOCX', cfg['output_dir'])
+          
+          # Set defaults for missing values
+          if not os.getenv('YEAR'): put('YEAR', '2024')
+          if not os.getenv('TEMPLATE'): put('TEMPLATE', 'recap_template.docx')
+          if not os.getenv('OUTDOCX'): put('OUTDOCX', 'recaps')
           PY
 
-      - name: Preflight (sanity print, no secrets)
+      - name: Setup enhanced environment
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          
+          # Create required directories
+          required_dirs = ['recaps', 'logs', 'backup', 'logos/team_logos', 'logos/league_logos', 'logos/sponsor_logos']
+          for dir_name in required_dirs:
+              Path(dir_name).mkdir(parents=True, exist_ok=True)
+              print(f"✅ Created directory: {dir_name}")
+          
+          # Create basic logo mapping files if they don't exist
+          mapping_files = {
+              'team_logos.json': {},
+              'league_logos.json': {},
+              'sponsor_logos.json': {}
+          }
+          
+          import json
+          for filename, default_content in mapping_files.items():
+              file_path = Path(filename)
+              if not file_path.exists():
+                  with open(file_path, 'w') as f:
+                      json.dump(default_content, f, indent=2)
+                  print(f"✅ Created mapping file: {filename}")
+          
+          print("🔧 Environment setup completed")
+          PY
+
+      - name: Preflight check and validation
         run: |
           python - <<'PY'
           import os, yaml, pathlib
+          from datetime import datetime
+          
+          def safe_show(v): 
+              if not v: return "❌ missing"
+              if len(v) > 20: return f"✅ present ({len(v)} chars)"
+              return f"✅ {v}"
+          
+          print("=" * 60)
+          print("🏈 GRIDIRON GAZETTE - PREFLIGHT CHECK")
+          print("=" * 60)
+          
+          # Configuration
           p = pathlib.Path('gazette.yml')
-          cfg = yaml.safe_load(p.read_text()) if p.exists() else {}
-          def safe(v): return f"present(len={len(v)})" if v else "missing"
-          print("YAML present:", p.exists())
-          print("LEAGUE_ID:", os.environ.get('LEAGUE_ID'))
-          print("YEAR:", os.environ.get('YEAR'))
-          print("TEMPLATE:", os.environ.get('TEMPLATE'))
-          print("OUTDOCX:", os.environ.get('OUTDOCX'))
-          print("ESPN_S2:", safe(os.environ.get('ESPN_S2')))
-          print("SWID:", safe(os.environ.get('SWID')))
-          print("OPENAI_API_KEY:", safe(os.environ.get('OPENAI_API_KEY')))
+          print(f"📄 Config file (gazette.yml): {'✅ found' if p.exists() else '❌ missing'}")
+          print(f"🏟️  League ID: {safe_show(os.environ.get('LEAGUE_ID'))}")
+          print(f"📅 Year: {safe_show(os.environ.get('YEAR'))}")
+          print(f"📝 Template: {safe_show(os.environ.get('TEMPLATE'))}")
+          print(f"📁 Output: {safe_show(os.environ.get('OUTDOCX'))}")
+          
+          # Secrets (don't show values)
+          print(f"🔐 ESPN_S2: {safe_show(os.environ.get('ESPN_S2'))}")
+          print(f"🔐 SWID: {safe_show(os.environ.get('SWID'))}")
+          print(f"🔐 OpenAI API Key: {safe_show(os.environ.get('OPENAI_API_KEY'))}")
+          
+          # Input parameters
+          print(f"📊 Mode: ${{ github.event.inputs.mode || 'normal' }}")
+          print(f"📆 Week Override: ${{ github.event.inputs.week || 'auto-detect' }}")
+          print(f"🤖 LLM Blurbs: ${{ github.event.inputs.llm_blurbs || 'true' }}")
+          print(f"✍️  Blurb Style: ${{ github.event.inputs.blurb_style || 'sabre' }}")
+          
+          # Check for required files
+          template_file = os.environ.get('TEMPLATE', 'recap_template.docx')
+          template_exists = pathlib.Path(template_file).exists()
+          print(f"📋 Template file: {'✅ found' if template_exists else '❌ missing'} ({template_file})")
+          
+          if not template_exists:
+              print("⚠️  WARNING: Template file missing - build may fail")
+          
+          print("=" * 60)
           PY
 
-      - name: Run Gazette build
+      - name: Test API connection
+        if: github.event.inputs.mode == 'test-api' || github.event.inputs.mode == 'debug'
+        run: |
+          python - <<'PY'
+          import os
+          from datetime import datetime, timedelta
+          
+          # Calculate current week if not specified
+          week = "${{ github.event.inputs.week }}"
+          if not week:
+              # Simple week calculation - you may need to adjust this
+              start_date = datetime(2024, 9, 5)  # Adjust to your league start
+              current_date = datetime.now()
+              week = str(min(18, max(1, ((current_date - start_date).days // 7) + 1)))
+          
+          league_id = os.environ.get('LEAGUE_ID')
+          year = os.environ.get('YEAR', '2024')
+          
+          print(f"🧪 Testing API connection for League {league_id}, Week {week}")
+          
+          try:
+              from espn_api.football import League
+              league = League(
+                  league_id=int(league_id), 
+                  year=int(year),
+                  espn_s2=os.environ.get('ESPN_S2'),
+                  swid=os.environ.get('SWID')
+              )
+              
+              print(f"✅ League connected: {league.settings.name}")
+              print(f"📊 Teams: {len(league.teams)}")
+              
+              # Test scoreboard
+              scoreboard = league.scoreboard(int(week))
+              print(f"📅 Week {week} scoreboard: {len(scoreboard)} matchups")
+              
+              if scoreboard:
+                  matchup = scoreboard[0]
+                  home = getattr(matchup, 'home_team', None)
+                  away = getattr(matchup, 'away_team', None)
+                  if home and away:
+                      print(f"📋 Sample matchup: {home.team_name} vs {away.team_name}")
+              
+              print("✅ API connection test passed!")
+              
+          except Exception as e:
+              print(f"❌ API connection failed: {e}")
+              import traceback
+              print(traceback.format_exc())
+              exit(1)
+          PY
+
+      - name: Create default logos if needed
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image, ImageDraw, ImageFont
+          
+          def create_default_logo(logo_dir, logo_type):
+              """Create a simple default logo"""
+              default_path = logo_dir / "_default.png"
+              if not default_path.exists():
+                  try:
+                      logo_dir.mkdir(parents=True, exist_ok=True)
+                      
+                      # Create 200x200 default logo
+                      img = Image.new('RGB', (200, 200), color='#f0f0f0')
+                      draw = ImageDraw.Draw(img)
+                      
+                      # Draw border
+                      draw.rectangle([10, 10, 190, 190], outline='#cccccc', width=3)
+                      
+                      # Add text
+                      try:
+                          font = ImageFont.load_default()
+                          text = logo_type
+                          bbox = draw.textbbox((0, 0), text, font=font)
+                          text_width = bbox[2] - bbox[0]
+                          text_height = bbox[3] - bbox[1]
+                          x = (200 - text_width) // 2
+                          y = (200 - text_height) // 2
+                          draw.text((x, y), text, fill='#666666', font=font)
+                      except:
+                          # Simple rectangle if text fails
+                          draw.rectangle([60, 60, 140, 140], fill='#dddddd')
+                      
+                      img.save(default_path)
+                      print(f"✅ Created default logo: {default_path}")
+                      return True
+                  except Exception as e:
+                      print(f"❌ Failed to create {default_path}: {e}")
+                      return False
+              return False
+          
+          # Create default logos for each type
+          logo_types = [
+              (Path('logos/team_logos'), 'TEAM'),
+              (Path('logos/league_logos'), 'LEAGUE'),
+              (Path('logos/sponsor_logos'), 'SPONSOR')
+          ]
+          
+          created_count = 0
+          for logo_dir, logo_type in logo_types:
+              if create_default_logo(logo_dir, logo_type):
+                  created_count += 1
+          
+          if created_count > 0:
+              print(f"🎨 Created {created_count} default logos")
+          else:
+              print("ℹ️  All default logos already exist")
+          PY
+
+      - name: Run debug analysis
+        if: github.event.inputs.mode == 'debug'
+        run: |
+          python - <<'PY'
+          import os
+          from datetime import datetime
+          
+          # Calculate week
+          week = "${{ github.event.inputs.week }}"
+          if not week:
+              start_date = datetime(2024, 9, 5)
+              current_date = datetime.now()
+              week = str(min(18, max(1, ((current_date - start_date).days // 7) + 1)))
+          
+          league_id = os.environ.get('LEAGUE_ID')
+          year = int(os.environ.get('YEAR', '2024'))
+          
+          print(f"🔍 Running debug analysis for League {league_id}, Week {week}")
+          
+          try:
+              from espn_api.football import League
+              league = League(
+                  league_id=int(league_id), 
+                  year=year,
+                  espn_s2=os.environ.get('ESPN_S2'),
+                  swid=os.environ.get('SWID')
+              )
+              
+              # Basic league analysis
+              print(f"League: {league.settings.name}")
+              print(f"Teams: {len(league.teams)}")
+              
+              # Analyze scoreboard
+              scoreboard = league.scoreboard(int(week))
+              print(f"Matchups found: {len(scoreboard)}")
+              
+              for i, matchup in enumerate(scoreboard):
+                  home = getattr(matchup, 'home_team', None)
+                  away = getattr(matchup, 'away_team', None)
+                  
+                  if home and away:
+                      home_score = getattr(home, 'scores', {}).get(int(week), 'N/A')
+                      away_score = getattr(away, 'scores', {}).get(int(week), 'N/A')
+                      
+                      print(f"  Matchup {i+1}: {home.team_name} ({home_score}) vs {away.team_name} ({away_score})")
+                      
+                      # Check lineup data
+                      home_lineup = getattr(home, 'lineup', [])
+                      away_lineup = getattr(away, 'lineup', [])
+                      print(f"    Lineup sizes: Home={len(home_lineup)}, Away={len(away_lineup)}")
+                  else:
+                      print(f"  Matchup {i+1}: Missing team data")
+              
+              print("🔍 Debug analysis completed")
+              
+              # Create debug report
+              with open('debug_report.txt', 'w') as f:
+                  f.write(f"Debug Report - League {league_id}, Week {week}\n")
+                  f.write(f"Generated: {datetime.now().isoformat()}\n\n")
+                  f.write(f"League: {league.settings.name}\n")
+                  f.write(f"Teams: {len(league.teams)}\n")
+                  f.write(f"Matchups: {len(scoreboard)}\n")
+                  for i, matchup in enumerate(scoreboard):
+                      home = getattr(matchup, 'home_team', None)
+                      away = getattr(matchup, 'away_team', None)
+                      if home and away:
+                          f.write(f"Matchup {i+1}: {home.team_name} vs {away.team_name}\n")
+              
+          except Exception as e:
+              print(f"❌ Debug analysis failed: {e}")
+              import traceback
+              print(traceback.format_exc())
+          PY
+
+      - name: Build Gazette (Normal Mode)
+        if: github.event.inputs.mode != 'debug' && github.event.inputs.mode != 'test-api'
         run: |
           set -euo pipefail
-          : "${TEMPLATE:=recap_template.docx}"
-          : "${OUTDOCX:=recaps}"
-          : "${YEAR:=2025}"
-          PY_ARGS=()
-          if [ -n "${{ github.event.inputs.week }}" ]; then PY_ARGS+=(--week "${{ github.event.inputs.week }}"); fi
-          python build_gazette.py --llm-blurbs --verbose "${PY_ARGS[@]}"
+          
+          # Set defaults
+          TEMPLATE="${TEMPLATE:-recap_template.docx}"
+          OUTDOCX="${OUTDOCX:-recaps}"
+          YEAR="${YEAR:-2024}"
+          
+          # Calculate week if not provided
+          if [ -z "${{ github.event.inputs.week }}" ]; then
+            WEEK=$(python -c "
+            from datetime import datetime
+            start = datetime(2024, 9, 5)  # Adjust to your league start
+            now = datetime.now()
+            week = min(18, max(1, ((now - start).days // 7) + 1))
+            print(week)
+            ")
+          else
+            WEEK="${{ github.event.inputs.week }}"
+          fi
+          
+          echo "🏈 Building Gazette for Week $WEEK"
+          
+          # Build arguments
+          ARGS=(
+            "$LEAGUE_ID"
+            "$YEAR" 
+            "$WEEK"
+            "--output" "$OUTDOCX"
+            "--template" "$TEMPLATE"
+            "--verbose"
+          )
+          
+          # Add LLM blurbs if requested
+          if [ "${{ github.event.inputs.llm_blurbs }}" = "true" ]; then
+            ARGS+=("--llm-blurbs")
+            ARGS+=("--style" "${{ github.event.inputs.blurb_style || 'sabre' }}")
+          fi
+          
+          # Handle batch mode
+          if [ "${{ github.event.inputs.mode }}" = "batch" ] && [ -n "${{ github.event.inputs.batch_weeks }}" ]; then
+            IFS=',' read -ra WEEKS <<< "${{ github.event.inputs.batch_weeks }}"
+            for week_num in "${WEEKS[@]}"; do
+              echo "📅 Building week $week_num..."
+              python gazette_main.py "${LEAGUE_ID}" "${YEAR}" "$week_num" --output "${OUTDOCX}/week_${week_num}" --template "$TEMPLATE" --verbose
+            done
+          else
+            # Single week build
+            if [ -f "gazette_main.py" ]; then
+              echo "Using enhanced gazette_main.py"
+              python gazette_main.py "${ARGS[@]}"
+            elif [ -f "build_gazette.py" ]; then
+              echo "Using original build_gazette.py"
+              python build_gazette.py --week "$WEEK" --llm-blurbs --verbose
+            else
+              echo "❌ No build script found (gazette_main.py or build_gazette.py)"
+              exit 1
+            fi
+          fi
 
-      - name: Upload Gazette artifact
+      - name: Post-build analysis
+        if: always()
+        run: |
+          echo "📊 POST-BUILD ANALYSIS"
+          echo "====================="
+          
+          # Check output files
+          if [ -d "recaps" ]; then
+            echo "📁 Output files:"
+            find recaps -name "*.docx" -o -name "*.pdf" | head -10 | while read file; do
+              size=$(stat -c%s "$file" 2>/dev/null || echo "0")
+              echo "  📄 $file ($(($size / 1024))KB)"
+            done
+          fi
+          
+          # Check logs
+          if [ -f "gazette.log" ]; then
+            echo "📋 Recent log entries:"
+            tail -10 gazette.log || echo "No log entries found"
+          fi
+          
+          # Check for errors
+          if [ -f "gazette.log" ]; then
+            error_count=$(grep -c "ERROR" gazette.log 2>/dev/null || echo "0")
+            warning_count=$(grep -c "WARNING" gazette.log 2>/dev/null || echo "0")
+            echo "⚠️  Warnings: $warning_count"
+            echo "❌ Errors: $error_count"
+          fi
+
+      - name: Upload Gazette artifacts
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: gazette
+          name: gridiron-gazette-week-${{ github.event.inputs.week || 'auto' }}
           path: |
             recaps/*.docx
             recaps/*.pdf
+            gazette.log
+            debug_report.txt
+          if-no-files-found: warn
+
+      - name: Upload debug artifacts
+        uses: actions/upload-artifact@v4
+        if: github.event.inputs.mode == 'debug' && always()
+        with:
+          name: debug-analysis-${{ github.run_number }}
+          path: |
+            debug_report.txt
+            gazette.log
+            *.json
           if-no-files-found: warn
