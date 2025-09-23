@@ -10,11 +10,16 @@ import logo_resolver as logos
 
 
 def _make_aliases(ctx: Dict[str, Any]) -> None:
+    """Add synonyms so different templates still resolve values."""
     week = ctx.get("WEEK_NUMBER")
     league = ctx.get("LEAGUE_NAME") or "League"
+
     ctx.setdefault("TITLE", f"Week {week} Fantasy Football Gazette — {league}")
     ctx.setdefault("SUBTITLE", "For those times when everyone wants to know your score.")
+
+    # Cover up to 7 rows
     for i in range(1, 8):
+        # Names
         for a, b in (
             (f"HOME{i}",        f"MATCHUP{i}_HOME"),
             (f"AWAY{i}",        f"MATCHUP{i}_AWAY"),
@@ -23,6 +28,8 @@ def _make_aliases(ctx: Dict[str, Any]) -> None:
         ):
             if b in ctx and a not in ctx:
                 ctx[a] = ctx[b]
+
+        # Scores
         for a, b in (
             (f"HS{i}",          f"MATCHUP{i}_HS"),
             (f"AS{i}",          f"MATCHUP{i}_AS"),
@@ -31,6 +38,8 @@ def _make_aliases(ctx: Dict[str, Any]) -> None:
         ):
             if b in ctx and a not in ctx:
                 ctx[a] = ctx[b]
+
+        # Top scorers (multiple variants)
         alias_pairs = [
             (f"MATCHUP{i}_TOP_SCORER_HOME", f"MATCHUP{i}_HOME_TOP_SCORER"),
             (f"MATCHUP{i}_TOP_SCORER_AWAY", f"MATCHUP{i}_AWAY_TOP_SCORER"),
@@ -44,6 +53,8 @@ def _make_aliases(ctx: Dict[str, Any]) -> None:
         for a, b in alias_pairs:
             if b in ctx and a not in ctx:
                 ctx[a] = ctx[b]
+
+    # Awards: alternate keys
     awards = {
         "CUPCAKE":         ctx.get("CUPCAKE_LINE", "—"),
         "KITTY":           ctx.get("KITTY_LINE", "—"),
@@ -64,15 +75,18 @@ def _make_aliases(ctx: Dict[str, Any]) -> None:
 
 
 def _attach_images(ctx: Dict[str, Any], doc: DocxTemplate) -> None:
+    """Resolve + sanitize logos, then embed with the SAME DocxTemplate instance."""
     # League & sponsor
     league_name = str(ctx.get("LEAGUE_NAME") or "")
     sponsor_name = str(ctx.get("SPONSOR_NAME") or "Gridiron Gazette")
 
-    lg = logos.league_logo(league_name)
+    lg_raw = logos.league_logo(league_name)
+    lg = logos.sanitize_logo_for_docx(lg_raw)
     if lg and Path(lg).exists():
         ctx["LEAGUE_LOGO"] = InlineImage(doc, lg, width=Mm(25))
 
-    sp = logos.sponsor_logo(sponsor_name)
+    sp_raw = logos.sponsor_logo(sponsor_name)
+    sp = logos.sanitize_logo_for_docx(sp_raw)
     if sp and Path(sp).exists():
         ctx["SPONSOR_LOGO"] = InlineImage(doc, sp, width=Mm(25))
 
@@ -80,11 +94,13 @@ def _attach_images(ctx: Dict[str, Any], doc: DocxTemplate) -> None:
     for i in range(1, 8):
         hkey, akey = f"MATCHUP{i}_HOME", f"MATCHUP{i}_AWAY"
         if hkey in ctx and ctx[hkey]:
-            hp = logos.team_logo(str(ctx[hkey]))
+            hp_raw = logos.team_logo(str(ctx[hkey]))
+            hp = logos.sanitize_logo_for_docx(hp_raw)
             if hp and Path(hp).exists():
                 ctx[f"MATCHUP{i}_HOME_LOGO"] = InlineImage(doc, hp, width=Mm(22))
         if akey in ctx and ctx[akey]:
-            ap = logos.team_logo(str(ctx[akey]))
+            ap_raw = logos.team_logo(str(ctx[akey]))
+            ap = logos.sanitize_logo_for_docx(ap_raw)
             if ap and Path(ap).exists():
                 ctx[f"MATCHUP{i}_AWAY_LOGO"] = InlineImage(doc, ap, width=Mm(22))
 
@@ -111,10 +127,15 @@ def build_weekly_recap(
     blurb_style: str = "sabre",
     blurb_words: int = 200,
 ) -> str:
+    """
+    Assemble context and render the weekly recap into DOCX.
+    Sabre blurbs are handled elsewhere; this focuses on ESPN data + awards + logos.
+    """
     ctx = build_context(league_id=league_id, year=year, week=week)
     ctx.setdefault("BLURB_STYLE", blurb_style)
     ctx.setdefault("BLURB_WORDS", blurb_words)
 
+    # Output tokens: {week}, {week02}, {year}, {league}
     week_num = int(ctx.get("WEEK_NUMBER", week or 0) or 0)
     league_name = ctx.get("LEAGUE_NAME", "League")
     out_token = output_dir
