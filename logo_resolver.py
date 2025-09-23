@@ -2,171 +2,251 @@ from __future__ import annotations
 import json
 import os
 import re
+import logging
 from pathlib import Path
 from typing import Dict, Optional
+
+log = logging.getLogger("logo_resolver")
 
 # --- Config / locations ---
 TEAM_LOGOS_FILE = os.getenv("TEAM_LOGOS_FILE", "team_logos.json")
 LEAGUE_LOGOS_FILE = os.getenv("LEAGUE_LOGOS_FILE", "league_logos.json")
 SPONSOR_LOGOS_FILE = os.getenv("SPONSOR_LOGOS_FILE", "sponsor_logos.json")
 
+# Primary logo directory
 LOGO_DIRS = [
+    Path("./logos/team_logos"),
     Path("logos/team_logos"),
     Path("logos/generated_logos"),
     Path("logos"),
 ]
 
-DEFAULT_TEAM_LOGO   = Path("logos/_default.png")
-DEFAULT_LEAGUE_DIR  = Path("logos/league_logos")
+DEFAULT_TEAM_LOGO = Path("logos/_default.png")
+DEFAULT_LEAGUE_DIR = Path("logos/league_logos")
 DEFAULT_SPONSOR_DIR = Path("logos/sponsor_logos")
 
 def _load_json(path: Path) -> Dict[str, str]:
+    """Load JSON file with error handling"""
     if not path.exists():
+        log.debug(f"JSON file not found: {path}")
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8")) or {}
-    except Exception:
+        content = path.read_text(encoding="utf-8")
+        data = json.loads(content) or {}
+        log.debug(f"Loaded {len(data)} entries from {path}")
+        return data
+    except Exception as e:
+        log.warning(f"Failed to load JSON from {path}: {e}")
         return {}
 
 def _norm(s: str) -> str:
-    s = (s or "").lower().strip()
-    s = re.sub(r"[^a-z0-9]+", "_", s)
-    s = re.sub(r"_+", "_", s).strip("_")
+    """Normalize team name for matching"""
+    if not s:
+        return ""
+    s = str(s).lower().strip()
+    # Remove common punctuation and special characters, but preserve alphanumeric
+    s = re.sub(r"[^\w\s]", "", s)  # Remove punctuation except word chars and spaces
+    s = re.sub(r"\s+", "_", s)     # Replace spaces with underscores
+    s = re.sub(r"_+", "_", s)      # Collapse multiple underscores
+    s = s.strip("_")               # Remove leading/trailing underscores
     return s
 
-# ------------- Team logos (mapping + filesystem) -------------
-_JSON_TEAM_MAP: Optional[Dict[str, str]] = None
-_FILE_CACHE: Dict[str, Optional[Path]] = {}
+def _build_filesystem_logo_map() -> Dict[str, str]:
+    """Build a comprehensive map of all available logos in the filesystem"""
+    logo_map = {}
+    
+    # Scan the primary logos directory
+    primary_dir = Path("./logos/team_logos")
+    if primary_dir.exists():
+        log.info(f"Scanning logo directory: {primary_dir}")
+        
+        for logo_file in primary_dir.glob("*.*"):
+            if logo_file.is_file() and logo_file.suffix.lower() in ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg']:
+                # Create multiple possible team name variations for this logo
+                base_name = logo_file.stem
+                
+                # Direct filename mapping
+                logo_map[_norm(base_name)] = str(logo_file)
+                
+                # Common variations
+                variations = [
+                    base_name.replace("_", " "),           # "Team_Name" -> "Team Name"
+                    base_name.replace("_", ""),            # "Team_Name" -> "TeamName"  
+                    base_name.replace("-", " "),           # "Team-Name" -> "Team Name"
+                    base_name.replace("-", ""),            # "Team-Name" -> "TeamName"
+                    base_name.replace(".", " "),           # "Team.Name" -> "Team Name"
+                    base_name.replace(".", ""),            # "Team.Name" -> "TeamName"
+                ]
+                
+                for variation in variations:
+                    norm_var = _norm(variation)
+                    if norm_var and norm_var not in logo_map:
+                        logo_map[norm_var] = str(logo_file)
+                
+                log.debug(f"Mapped logo: {base_name} -> {logo_file}")
+        
+        log.info(f"Built filesystem logo map with {len(logo_map)} mappings")
+    else:
+        log.warning(f"Logo directory not found: {primary_dir}")
+    
+    return logo_map
 
-def _build_team_map() -> Dict[str, str]:
-    data = _load_json(Path(TEAM_LOGOS_FILE))
-    result: Dict[str, str] = {}
-    if not data:
-        return result
-
-    # Flat map: { "Team Name": "path.png" }
-    if all(isinstance(v, str) for v in data.values()):
-        for k, v in data.items():
-            result[_norm(k)] = v
-        return result
-
-    # Hierarchical: { "default": {...}, "leagues": { "887998": {...}, "Browns SEA/KC": {...}}}
-    league_id = os.getenv("LEAGUE_ID") or ""
-    league_name = os.getenv("LEAGUE_DISPLAY_NAME") or os.getenv("LEAGUE_NAME") or ""
-
-    default_map = data.get("default") or {}
-    for k, v in default_map.items():
-        result[_norm(k)] = v
-
-    leagues = data.get("leagues") or {}
-    if isinstance(leagues, dict):
-        if league_id and league_id in leagues:
-            for k, v in (leagues[league_id] or {}).items():
-                result[_norm(k)] = v
-        if league_name and league_name in leagues:
-            for k, v in (leagues[league_name] or {}).items():
-                result[_norm(k)] = v
-
-    return result
-
-def _json_team_map() -> Dict[str, str]:
-    global _JSON_TEAM_MAP
-    if _JSON_TEAM_MAP is None:
-        _JSON_TEAM_MAP = _build_team_map()
-    return _JSON_TEAM_MAP
-
-def _find_in_dirs(norm_name: str) -> Optional[Path]:
-    if norm_name in _FILE_CACHE:
-        return _FILE_CACHE[norm_name]
-
-    exts = [".png", ".jpg", ".jpeg", ".gif", ".webp"]
-    # exact filename
-    for d in LOGO_DIRS:
-        for ext in exts:
-            p = d / f"{norm_name}{ext}"
-            if p.exists():
-                _FILE_CACHE[norm_name] = p
-                return p
-
-    # loose contains match
-    candidates = []
-    for d in LOGO_DIRS:
-        if not d.exists():
-            continue
-        for p in d.iterdir():
-            if p.is_file():
-                stem = _norm(p.stem)
-                if norm_name in stem or stem in norm_name:
-                    candidates.append(p)
-    if candidates:
-        _FILE_CACHE[norm_name] = candidates[0]
-        return candidates[0]
-
-    _FILE_CACHE[norm_name] = None
+def _fuzzy_match_logo(team_name: str, logo_map: Dict[str, str]) -> Optional[str]:
+    """Find the best logo match for a team name"""
+    if not team_name:
+        return None
+        
+    norm_team = _norm(team_name)
+    if not norm_team:
+        return None
+    
+    # 1. Exact match
+    if norm_team in logo_map:
+        log.debug(f"Exact logo match: '{team_name}' -> {logo_map[norm_team]}")
+        return logo_map[norm_team]
+    
+    # 2. Substring matches (both directions)
+    for logo_key, logo_path in logo_map.items():
+        if norm_team in logo_key or logo_key in norm_team:
+            log.debug(f"Substring logo match: '{team_name}' -> '{logo_key}' -> {logo_path}")
+            return logo_path
+    
+    # 3. Word-level matching for multi-word team names
+    team_words = set(norm_team.split("_"))
+    if len(team_words) > 1:
+        best_match = None
+        best_score = 0
+        
+        for logo_key, logo_path in logo_map.items():
+            logo_words = set(logo_key.split("_"))
+            common_words = team_words.intersection(logo_words)
+            if common_words:
+                score = len(common_words) / max(len(team_words), len(logo_words))
+                if score > best_score and score > 0.4:  # At least 40% word overlap
+                    best_match = logo_path
+                    best_score = score
+        
+        if best_match:
+            log.debug(f"Word-level logo match: '{team_name}' -> {best_match} (score: {best_score:.2f})")
+            return best_match
+    
     return None
 
+# Cache the filesystem logo map
+_FILESYSTEM_LOGO_MAP: Optional[Dict[str, str]] = None
+
+def _get_filesystem_logo_map() -> Dict[str, str]:
+    """Get cached filesystem logo map"""
+    global _FILESYSTEM_LOGO_MAP
+    if _FILESYSTEM_LOGO_MAP is None:
+        _FILESYSTEM_LOGO_MAP = _build_filesystem_logo_map()
+    return _FILESYSTEM_LOGO_MAP
+
 def team_logo(team_name: str) -> Optional[str]:
-    norm = _norm(team_name)
-    if not norm:
+    """Get team logo path with comprehensive filesystem scanning"""
+    if not team_name:
         return str(DEFAULT_TEAM_LOGO) if DEFAULT_TEAM_LOGO.exists() else None
-
-    # 1) JSON mapping (like commit 8df2db8—lowercased filenames ok)
-    jmap = _json_team_map()
-    if norm in jmap:
-        p = Path(jmap[norm])
-        if p.exists():
-            return str(p)
-
-    # 2) Filesystem search
-    p = _find_in_dirs(norm)
-    if p and p.exists():
-        return str(p)
-
-    # 3) default
-    return str(DEFAULT_TEAM_LOGO) if DEFAULT_TEAM_LOGO.exists() else None
-
-# ------------- League/Sponsor logos (JSON + default dirs) -------------
-
-def _find_brand_logo(display_name: str, json_file: str, default_dir: Path) -> Optional[str]:
-    """
-    Priority:
-      1) exact key in JSON -> path exists
-      2) slug-match key in JSON -> path exists
-      3) scan default_dir for a slugged filename
-      4) None
-    """
-    nm = display_name or ""
-    slug = _norm(nm)
-    mapping = _load_json(Path(json_file))
-
-    # 1) direct key
-    rel = mapping.get(nm)
-    if isinstance(rel, str) and Path(rel).exists():
-        return str(Path(rel))
-
-    # 2) slug-match key
-    for k, v in mapping.items():
-        if _norm(k) == slug and isinstance(v, str) and Path(v).exists():
-            return str(Path(v))
-
-    # 3) scan folder by slug
-    if default_dir.exists():
-        for p in default_dir.glob("*.*"):
-            if _norm(p.stem) == slug and p.is_file():
-                return str(p)
-
+    
+    log.debug(f"Looking for team logo: '{team_name}'")
+    
+    # 1. Try JSON mapping first (if available)
+    try:
+        data = _load_json(Path(TEAM_LOGOS_FILE))
+        if data:
+            # Handle flat mapping
+            if all(isinstance(v, str) for v in data.values()):
+                norm_team = _norm(team_name)
+                if norm_team in {_norm(k): v for k, v in data.items()}:
+                    json_path = next(v for k, v in data.items() if _norm(k) == norm_team)
+                    if Path(json_path).exists():
+                        log.debug(f"JSON logo match: {team_name} -> {json_path}")
+                        return str(Path(json_path))
+    except Exception as e:
+        log.debug(f"JSON lookup failed: {e}")
+    
+    # 2. Use comprehensive filesystem mapping
+    filesystem_map = _get_filesystem_logo_map()
+    logo_path = _fuzzy_match_logo(team_name, filesystem_map)
+    if logo_path and Path(logo_path).exists():
+        log.debug(f"Filesystem logo match: {team_name} -> {logo_path}")
+        return logo_path
+    
+    # 3. Default fallback
+    if DEFAULT_TEAM_LOGO.exists():
+        log.debug(f"Using default logo for: {team_name}")
+        return str(DEFAULT_TEAM_LOGO)
+    
+    log.warning(f"No logo found for team: {team_name}")
     return None
 
 def league_logo(name: Optional[str] = None) -> Optional[str]:
+    """Get league logo path"""
     league_name = name or os.getenv("LEAGUE_DISPLAY_NAME") or os.getenv("LEAGUE_NAME") or ""
+    
+    # Check for brownseakc.png specifically
+    possible_paths = [
+        Path("./logos/team_logos/brownseakc.png"),
+        Path("logos/team_logos/brownseakc.png"),
+        Path("logos/league_logos/brownseakc.png"),
+        Path("logos/brownseakc.png"),
+    ]
+    
+    for path in possible_paths:
+        if path.exists():
+            log.debug(f"Found league logo: {path}")
+            return str(path)
+    
+    # Fallback to JSON mapping
     return _find_brand_logo(league_name, LEAGUE_LOGOS_FILE, DEFAULT_LEAGUE_DIR)
 
 def sponsor_logo(name: Optional[str] = None) -> Optional[str]:
+    """Get sponsor logo path"""
     sponsor_name = name or os.getenv("SPONSOR_NAME") or "Gridiron Gazette"
     return _find_brand_logo(sponsor_name, SPONSOR_LOGOS_FILE, DEFAULT_SPONSOR_DIR)
 
-# --- image sanitation for docx ---
-from PIL import Image, UnidentifiedImageError
+def _find_brand_logo(display_name: str, json_file: str, default_dir: Path) -> Optional[str]:
+    """Find brand logo with priority: JSON -> directory scan -> None"""
+    if not display_name:
+        return None
+        
+    nm = display_name.strip()
+    slug = _norm(nm)
+    mapping = _load_json(Path(json_file))
+
+    log.debug(f"Looking for brand logo: '{nm}' -> '{slug}'")
+
+    # 1. Direct key match in JSON
+    if nm in mapping:
+        rel = mapping[nm]
+        if isinstance(rel, str) and Path(rel).exists():
+            log.debug(f"Brand exact match: {nm} -> {rel}")
+            return str(Path(rel))
+
+    # 2. Fuzzy match in JSON
+    for k, v in mapping.items():
+        if _norm(k) == slug and isinstance(v, str) and Path(v).exists():
+            log.debug(f"Brand fuzzy match: {nm} -> {v}")
+            return str(Path(v))
+
+    # 3. Scan default directory
+    if default_dir.exists():
+        exts = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]
+        for p in default_dir.glob("*.*"):
+            if p.is_file() and p.suffix.lower() in exts:
+                if _norm(p.stem) == slug:
+                    log.debug(f"Brand directory match: {nm} -> {p}")
+                    return str(p)
+
+    log.debug(f"No brand logo found for: {nm}")
+    return None
+
+# --- Image sanitation for docx ---
+try:
+    from PIL import Image, UnidentifiedImageError
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+    log.warning("PIL not available - logo sanitation disabled")
 
 _CACHE_DIR = Path("logos/_cache")
 _CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -176,20 +256,44 @@ def _sanitize_for_docx(img_path: str | Path) -> Optional[str]:
     Open the image with Pillow and re-save as a proper PNG copy in logos/_cache.
     Returns path to sanitized PNG or None if it fails.
     """
+    if not PIL_AVAILABLE:
+        # If PIL not available, just return original path if it exists
+        p = Path(img_path)
+        return str(p) if p.exists() and p.is_file() else None
+    
     try:
         p = Path(img_path)
         if not p.exists() or not p.is_file():
             return None
+            
         out = _CACHE_DIR / (p.stem + ".png")
+        
+        # Skip if already sanitized and newer
+        if out.exists() and out.stat().st_mtime >= p.stat().st_mtime:
+            return str(out)
+        
         with Image.open(p) as im:
+            # Convert to compatible mode
             if im.mode not in ("RGB", "RGBA"):
-                im = im.convert("RGBA" if "A" in im.getbands() else "RGB")
+                if "transparency" in im.info or im.mode == "P":
+                    im = im.convert("RGBA")
+                else:
+                    im = im.convert("RGB")
+            
+            # Save as PNG
             im.save(out, format="PNG", optimize=True)
+            log.debug(f"Sanitized logo: {p} -> {out}")
+            
         return str(out)
-    except (UnidentifiedImageError, OSError, ValueError):
-        return None
+        
+    except Exception as e:
+        log.warning(f"Failed to sanitize image {img_path}: {e}")
+        # Return original if sanitization fails
+        p = Path(img_path)
+        return str(p) if p.exists() else None
 
 def sanitize_logo_for_docx(path_str: Optional[str]) -> Optional[str]:
+    """Sanitize logo for docx with error handling"""
     if not path_str:
         return None
     return _sanitize_for_docx(path_str)
