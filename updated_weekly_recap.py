@@ -65,6 +65,44 @@ def _map_front_page_slots(ctx: Dict[str, Any]) -> None:
         ctx[f"MATCHUP{n}_DEF"]       = _safe(g.get("DEF") or g.get("DEF_NOTE"))
 
 
+def _fill_spotlight_fallbacks(games):
+    """
+    Ensure Stats Spotlight fields (TOP_HOME, TOP_AWAY, BUST, KEYPLAY, DEF) are never blank.
+    Uses team scores/names when starters are unavailable.
+    """
+    for g in games:
+        home = g.get("HOME_TEAM_NAME") or "Home"
+        away = g.get("AWAY_TEAM_NAME") or "Away"
+        hs   = g.get("HOME_SCORE") or "0"
+        as_  = g.get("AWAY_SCORE") or "0"
+
+        # existing values (from players) win; otherwise set simple team-based fallbacks
+        g.setdefault("TOP_HOME",  f"{home}: {hs} pts (team)")
+        g.setdefault("TOP_AWAY",  f"{away}: {as_} pts (team)")
+
+        # Biggest Bust: the lower-scoring side (team-level proxy)
+        if not g.get("BUST"):
+            try:
+                hsf = float(hs); asf = float(as_)
+                loser_name, loser_pts = (home, hsf) if hsf <= asf else (away, asf)
+                g["BUST"] = f"{loser_name}: {loser_pts:.1f} pts (team)"
+            except Exception:
+                g["BUST"] = f"{home if str(hs) <= str(as_) else away}: {min(hs, as_)} pts (team)"
+
+        # Key Play: if your recap/BLURB exists, reference it; else generic turning-point
+        if not g.get("KEYPLAY") and not g.get("KEY_PLAY"):
+            recap = (g.get("RECAP") or g.get("BLURB") or "").strip()
+            g["KEYPLAY"] = recap.split(".")[0] + "." if recap else "Turning point: late momentum swing decided it."
+
+        # Defense Note: generic, tied to winner/loser
+        if not g.get("DEF") and not g.get("DEF_NOTE"):
+            try:
+                hsf = float(hs); asf = float(as_)
+                winner, loser, lpts = (home, away, asf) if hsf >= asf else (away, home, hsf)
+                g["DEF"] = f"{winner} defense forced key stops, holding {loser} to {lpts:.1f}."
+            except Exception:
+                g["DEF"] = "Defense held firm in the clutch."
+
 def _compute_top_bust_from_board(league: Any, week: int) -> List[Dict[str, str]]:
     """Optional: fill TOP/BUST when starters are available; otherwise silently skip."""
     out: List[Dict[str, str]] = []
@@ -137,6 +175,8 @@ def build_weekly_recap(
     ctx["GAMES"] = games
     _attach_special_logos(doc, ctx)
     _map_front_page_slots(ctx)
+
+    doc.render(ctx)  # preliminary render to measure text
 
     # Output naming — supports tokens in OUTDOCX
     league_name = (ctx.get("LEAGUE_NAME") or ctx.get("LEAGUE_LOGO_NAME") or "League").strip()
