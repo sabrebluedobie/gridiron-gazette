@@ -12,9 +12,9 @@ from datetime import datetime, timedelta
 # ==================== CONFIGURATION ====================
 # Update these with your actual values
 
-LEAGUE_ID = "YOUR_LEAGUE_ID_HERE"  # Your ESPN League ID
-YEAR = 2024
-FANTASY_SEASON_START = "2024-09-05"  # Adjust to your league's start date
+LEAGUE_ID = "887998"  # Your ESPN League ID
+YEAR = 2025
+FANTASY_SEASON_START = "2025-09-02"  # Adjust to your league's start date
 
 # Optional: Set these as environment variables instead
 # ESPN_S2 = "your_espn_s2_cookie"
