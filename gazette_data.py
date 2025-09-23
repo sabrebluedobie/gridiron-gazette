@@ -1,233 +1,222 @@
-#!/usr/bin/env python3
-"""
-gazette_data.py — ESPN fetch & context assembly for Gridiron Gazette
-
-Goals:
-- Always return GAME entries with names + numeric scores as STRINGS for DocxTPL.
-- Work with either env name pair: (ESPN_S2 or S2) and (SWID or ESPN_SWID).
-- Be resilient if ESPN hides starters: scoreboard still gives team scores.
-- Provide optional player-derived Spotlight when starters are visible.
-- Precompute Weekly Awards (Cupcake, Kitty, Top Score).
-
-Exports:
-- fetch_week_from_espn(league, year, week) -> dict
-- assemble_context(league_id:str, year:int, week:int, llm_blurbs:bool=False, blurb_style:str="sabre") -> dict
-- build_context = assemble_context  (back-compat)
-"""
-
+# gazette_data.py
 from __future__ import annotations
-from typing import Any, Dict, List, Optional, Tuple
 import os
-import logging
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
-log = logging.getLogger("gazette_data")
-if not log.handlers:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+from espn_api.football import League
 
-try:
-    from espn_api.football import League
-except Exception:  # package not installed or import error
-    League = None  # type: ignore
+# ---------------------------
+# Cookie & league utilities
+# ---------------------------
 
+def _read_cookie_pair() -> Tuple[Optional[str], Optional[str]]:
+    """Read ESPN cookies from env with multiple common names; normalize SWID."""
+    s2 = os.getenv("ESPN_S2") or os.getenv("S2")
+    swid = os.getenv("SWID") or os.getenv("ESPN_SWID")
+    if swid:
+        swid = swid.strip()
+        # SWID must be wrapped in braces for espn_api; add if missing
+        if not (swid.startswith("{") and swid.endswith("}")):
+            swid = "{" + swid.strip("{}") + "}"
+    return (s2 if s2 and s2.strip() else None,
+            swid if swid and swid.strip() else None)
 
-# ------------------- helpers -------------------
+def get_league(league_id: int, year: int) -> League:
+    s2, swid = _read_cookie_pair()
+    # Let this raise if truly missing; caller can catch and fallback
+    return League(league_id=league_id, year=year, espn_s2=s2, swid=swid)
 
-def _env(name: str) -> Optional[str]:
-    v = os.getenv(name)
-    return v.strip() if isinstance(v, str) and v.strip() else None
+# ---------------------------
+# Data structures
+# ---------------------------
 
-def _coerce_str(x) -> str:
-    """Return a clean string for docxtpl."""
-    try:
-        if x is None:
-            return ""
-        if isinstance(x, float):
-            s = f"{x:.2f}".rstrip("0").rstrip(".")
-            return s
-        return str(x)
-    except Exception:
-        return str(x)
+@dataclass
+class TeamGame:
+    name: str
+    abbrev: str
+    score: float
+    logo: Optional[str] = None
+    top_scorer_name: Optional[str] = None
+    top_scorer_pts: Optional[float] = None
 
-def _float_or_none(x) -> Optional[float]:
+@dataclass
+class MatchupRow:
+    home: TeamGame
+    away: TeamGame
+    margin: float
+
+@dataclass
+class Awards:
+    cupcake_team: Optional[str] = None
+    cupcake_score: Optional[float] = None
+    kitty_loser: Optional[str] = None
+    kitty_winner: Optional[str] = None
+    kitty_gap: Optional[float] = None
+    top_team: Optional[str] = None
+    top_score: Optional[float] = None
+
+# ---------------------------
+# Fetch week & compute stats
+# ---------------------------
+
+def _safe_float(x) -> float:
     try:
         return float(x)
     except Exception:
-        return None
+        return 0.0
 
-def _team_display_name(t: Any) -> str:
-    """
-    Prefer 'team_name'; fall back to 'location'/'name' or first owner if needed.
-    Avoid properties that changed across espn_api versions (e.g., .owner vs .owners).
-    """
-    for attr in ("team_name", "location", "name"):
-        if hasattr(t, attr):
-            v = getattr(t, attr)
-            if isinstance(v, str) and v.strip():
-                return v
-    if hasattr(t, "owners") and t.owners:
-        return str(t.owners[0])
-    return "Team"
+def fetch_week_from_espn(league: League, week: int) -> List[MatchupRow]:
+    """Fetch scoreboard for week and return normalized rows."""
+    rows: List[MatchupRow] = []
+    scoreboard = league.scoreboard(week=week)
+    for m in scoreboard:
+        home_team = m.home_team
+        away_team = m.away_team
+        hs = _safe_float(m.home_score)
+        as_ = _safe_float(m.away_score)
+        rows.append(
+            MatchupRow(
+                home=TeamGame(
+                    name=home_team.team_name,
+                    abbrev=getattr(home_team, "abbrev", home_team.team_abbrev) if hasattr(home_team, "abbrev") else getattr(home_team, "team_abbrev", ""),
+                    score=hs,
+                ),
+                away=TeamGame(
+                    name=away_team.team_name,
+                    abbrev=getattr(away_team, "abbrev", away_team.team_abbrev) if hasattr(away_team, "abbrev") else getattr(away_team, "team_abbrev", ""),
+                    score=as_,
+                ),
+                margin=abs(hs - as_)
+            )
+        )
+    return rows
 
-def _make_league(league_id: int, year: int) -> Optional[Any]:
-    """Create League with tolerant env var names for cookies."""
-    if League is None:
-        log.error("espn_api not available; install espn-api")
-        return None
-    s2 = _env("ESPN_S2") or _env("S2")
-    swid = _env("SWID") or _env("ESPN_SWID")
+def enrich_with_player_tops(league: League, week: int, rows: List[MatchupRow]) -> None:
+    """
+    Fill top_scorer_name/pts for each team using box_scores.
+    If unavailable or API changes, we leave graceful fallback (None).
+    """
     try:
-        L = League(league_id=league_id, year=year, espn_s2=s2, swid=swid)
-        log.info("League object created successfully")
-        return L
-    except Exception as e:
-        log.error("League creation failed: %s", e)
-        return None
-
-# ------------------- core fetch -------------------
-
-def fetch_week_from_espn(league: Any, year: int, week: int) -> Dict[str, Any]:
-    """
-    Pull league name + scoreboard for the week.
-    Always returns dict with keys: LEAGUE_NAME, GAMES (list of dicts)
-    Each game dict contains stringified HOME_SCORE/AWAY_SCORE for docxtpl.
-    Spotlight placeholders are included but may be filled later by builder.
-    """
-    out: Dict[str, Any] = {"LEAGUE_NAME": "", "GAMES": []}
-    if not league:
-        log.warning("No League object; returning empty context shell")
-        return out
-
-    # league name
-    lname = ""
-    try:
-        if getattr(league, "settings", None) and getattr(league.settings, "name", None):
-            lname = league.settings.name
-        elif getattr(league, "league_name", None):
-            lname = league.league_name
+        box = league.box_scores(week=week)
     except Exception:
-        pass
-    out["LEAGUE_NAME"] = lname or os.getenv("LEAGUE_DISPLAY_NAME") or "League"
+        return
 
-    # scoreboard
-    try:
-        log.info("Fetching scoreboard for week %s", week)
-        board = league.scoreboard(week)
-        log.info("Scoreboard fetched: %d matchups", len(board) if board else 0)
-        games: List[Dict[str, Any]] = []
-        for m in board:
-            ht = getattr(m, "home_team", None)
-            at = getattr(m, "away_team", None)
-            hs = getattr(m, "home_score", 0.0)
-            as_ = getattr(m, "away_score", 0.0)
-            g = {
-                "HOME_TEAM_NAME": _team_display_name(ht),
-                "AWAY_TEAM_NAME": _team_display_name(at),
-                "HOME_SCORE": _coerce_str(hs),
-                "AWAY_SCORE": _coerce_str(as_),
-                # Spotlight placeholders (builder may fill from starters or fallback)
-                "TOP_HOME": "", "TOP_AWAY": "", "BUST": "", "KEYPLAY": "", "DEF": "",
-            }
-            games.append(g)
-        out["GAMES"] = games
-        log.info("Successfully extracted data for %d games", len(games))
-    except Exception as e:
-        log.error("Failed to read scoreboard: %s", e)
+    # Build map: team_id -> (player_name, points)
+    # espn_api 0.45 returns BoxScore with home_lineup / away_lineup of PlayerSlot objects
+    # Each slot has .points and .playerName (on .playerName or .name depending on version)
+    def best_from_lineup(lineup) -> Tuple[Optional[str], Optional[float]]:
+        best_n, best_p = None, None
+        for slot in lineup or []:
+            pts = _safe_float(getattr(slot, "points", 0.0))
+            # name attr can differ by version
+            nm = getattr(slot, "name", None) or getattr(getattr(slot, "player", None), "name", None) or getattr(slot, "playerName", None)
+            if nm is None:
+                continue
+            if best_p is None or pts > best_p:
+                best_p, best_n = pts, nm
+        return best_n, best_p
 
-    return out
+    # Match BoxScore objects to our rows by team name (robust for custom team names)
+    for bs in box:
+        h_name = getattr(bs.home_team, "team_name", "")
+        a_name = getattr(bs.away_team, "team_name", "")
+        h_top = best_from_lineup(getattr(bs, "home_lineup", []))
+        a_top = best_from_lineup(getattr(bs, "away_lineup", []))
+        for r in rows:
+            if r.home.name == h_name and r.away.name == a_name:
+                r.home.top_scorer_name, r.home.top_scorer_pts = h_top
+                r.away.top_scorer_name, r.away.top_scorer_pts = a_top
+                break
 
-# ------------------- awards (from team scores) -------------------
+def compute_awards(rows: List[MatchupRow]) -> Awards:
+    awd = Awards()
+    if not rows:
+        return awd
 
-def _compute_awards(games: List[Dict[str, Any]]) -> Dict[str, str]:
-    """
-    Compute three weekly awards from team scores:
-    - CUPCAKE (lowest single-team score)
-    - KITTY (largest losing margin)
-    - TOPSCORE (highest single-team score)
-    Returns dict with friendly strings suitable for docx placeholders.
-    """
-    lows: List[Tuple[str, float]] = []
-    highs: List[Tuple[str, float]] = []
-    margins: List[Tuple[str, str, float]] = []
+    # Cupcake: lowest single-team score
+    all_teams = []
+    for r in rows:
+        all_teams.append(("home", r.home))
+        all_teams.append(("away", r.away))
+    low = min(all_teams, key=lambda x: x[1].score)
+    awd.cupcake_team = low[1].name
+    awd.cupcake_score = round(low[1].score, 2)
 
-    for g in games:
-        home, away = g.get("HOME_TEAM_NAME","Home"), g.get("AWAY_TEAM_NAME","Away")
-        hs = _float_or_none(g.get("HOME_SCORE")); as_ = _float_or_none(g.get("AWAY_SCORE"))
-        if hs is not None:
-            lows.append((home, hs)); highs.append((home, hs))
-        if as_ is not None:
-            lows.append((away, as_)); highs.append((away, as_))
-        if hs is not None and as_ is not None:
-            if hs >= as_:
-                margins.append((away, home, hs - as_))  # away lost by (hs-as)
-            else:
-                margins.append((home, away, as_ - hs))  # home lost by (as-hs)
+    # Top score: highest single-team score
+    high = max(all_teams, key=lambda x: x[1].score)
+    awd.top_team = high[1].name
+    awd.top_score = round(high[1].score, 2)
 
-    awards: Dict[str, str] = {}
-
-    if lows:
-        loser, score = min(lows, key=lambda t: t[1])
-        s = f"{score:.2f}".rstrip("0").rstrip(".")
-        awards["CUPCAKE"] = f"{loser} — {s}"
+    # Kitty (largest gap loss): find matchup with max margin and record loser/winner
+    worst = max(rows, key=lambda r: r.margin)
+    if worst.home.score > worst.away.score:
+        awd.kitty_winner, awd.kitty_loser = worst.home.name, worst.away.name
     else:
-        awards["CUPCAKE"] = "—"
+        awd.kitty_winner, awd.kitty_loser = worst.away.name, worst.home.name
+    awd.kitty_gap = round(abs(worst.home.score - worst.away.score), 2)
 
-    if margins:
-        losing_team, winning_team, gap = max(margins, key=lambda t: t[2])
-        s = f"{gap:.2f}".rstrip("0").rstrip(".")
-        awards["KITTY"] = f"{losing_team} to {winning_team} — {s}"
-    else:
-        awards["KITTY"] = "—"
+    return awd
 
-    if highs:
-        top_team, top = max(highs, key=lambda t: t[1])
-        s = f"{top:.2f}".rstrip("0").rstrip(".")
-        awards["TOPSCORE"] = f"{top_team} — {s}"
-    else:
-        awards["TOPSCORE"] = "—"
+# ---------------------------
+# Context assembly for DOCX
+# ---------------------------
 
-    return awards
+def _fmt_pts(x: Optional[float]) -> Optional[str]:
+    return None if x is None else f"{x:.2f}".rstrip("0").rstrip(".")
 
-# ------------------- assemble_context (public) -------------------
+def build_context(league_id: int, year: int, week: int) -> Dict[str, Any]:
+    league = get_league(league_id, year)
+    rows = fetch_week_from_espn(league, week)
+    # Try to add player tops; it's okay if it fails
+    enrich_with_player_tops(league, week, rows)
 
-def assemble_context(league_id: str, year: int, week: int,
-                     llm_blurbs: bool = False, blurb_style: str = "sabre") -> Dict[str, Any]:
-    """
-    Main context for the template. Returns:
-      LEAGUE_NAME, WEEK_NUMBER, WEEKLY_INTRO, GAMES[...],
-      plus CUPCAKE / KITTY / TOPSCORE strings for your awards section.
-    """
-    ctx: Dict[str, Any] = {
-        "LEAGUE_NAME": os.getenv("LEAGUE_DISPLAY_NAME") or "League",
-        "WEEK_NUMBER": week,
-        "WEEKLY_INTRO": f"Week {week} delivered thrilling fantasy performances across head-to-head battles.",
-        "GAMES": [],
-        "CUPCAKE": "—",
-        "KITTY": "—",
-        "TOPSCORE": "—",
-    }
+    ctx: Dict[str, Any] = {}
+    ctx["LEAGUE_ID"] = league_id
+    ctx["YEAR"] = year
+    ctx["WEEK_NUMBER"] = week
+    ctx["LEAGUE_NAME"] = getattr(league, "settings", {}).get("name", None) or getattr(league, "league_name", None) or "League"
 
-    # Create the League
-    try:
-        lid = int(league_id) if isinstance(league_id, str) else int(league_id)
-    except Exception:
-        lid = int(str(league_id).strip())
+    # Per-matchup fields, 1-based up to 7 just in case
+    for i, r in enumerate(rows, start=1):
+        # Team names and scores
+        ctx[f"MATCHUP{i}_HOME"] = r.home.name
+        ctx[f"MATCHUP{i}_AWAY"] = r.away.name
+        ctx[f"MATCHUP{i}_HS"]   = _fmt_pts(r.home.score)
+        ctx[f"MATCHUP{i}_AS"]   = _fmt_pts(r.away.score)
+        # Top scorers (various aliases your template may use)
+        ctx[f"MATCHUP{i}_HOME_TOP_SCORER"] = r.home.top_scorer_name or ""
+        ctx[f"MATCHUP{i}_HOME_TOP_POINTS"] = _fmt_pts(r.home.top_scorer_pts) or ""
+        ctx[f"MATCHUP{i}_AWAY_TOP_SCORER"] = r.away.top_scorer_name or ""
+        ctx[f"MATCHUP{i}_AWAY_TOP_POINTS"] = _fmt_pts(r.away.top_scorer_pts) or ""
+        # Older/alternate keys seen in some templates
+        ctx[f"MATCHUP{i}_TOP_SCORER_HOME"] = ctx[f"MATCHUP{i}_HOME_TOP_SCORER"]
+        ctx[f"MATCHUP{i}_TOP_SCORER_AWAY"] = ctx[f"MATCHUP{i}_AWAY_TOP_SCORER"]
+        ctx[f"MATCHUP{i}_TOP_POINTS_HOME"] = ctx[f"MATCHUP{i}_HOME_TOP_POINTS"]
+        ctx[f"MATCHUP{i}_TOP_POINTS_AWAY"] = ctx[f"MATCHUP{i}_AWAY_TOP_POINTS"]
 
-    L = _make_league(lid, year)
-    live = fetch_week_from_espn(L, year, week)
+    # Awards
+    awd = compute_awards(rows)
+    # Primary keys
+    ctx["AWARD_CUPCAKE_TEAM"]   = awd.cupcake_team or ""
+    ctx["AWARD_CUPCAKE_SCORE"]  = _fmt_pts(awd.cupcake_score) or ""
+    ctx["AWARD_KITTY_LOSER"]    = awd.kitty_loser or ""
+    ctx["AWARD_KITTY_WINNER"]   = awd.kitty_winner or ""
+    ctx["AWARD_KITTY_GAP"]      = _fmt_pts(awd.kitty_gap) or ""
+    ctx["AWARD_TOPSCORE_TEAM"]  = awd.top_team or ""
+    ctx["AWARD_TOPSCORE_POINTS"]= _fmt_pts(awd.top_score) or ""
 
-    if live.get("LEAGUE_NAME"):
-        ctx["LEAGUE_NAME"] = live["LEAGUE_NAME"]
-    if live.get("GAMES"):
-        ctx["GAMES"] = live["GAMES"]
+    # Friendly, ready-to-render lines (cover the em-dash slots your DOCX shows)
+    ctx["CUPCAKE_LINE"] = (f"{ctx['AWARD_CUPCAKE_TEAM']} — {ctx['AWARD_CUPCAKE_SCORE']}"
+                           if ctx["AWARD_CUPCAKE_TEAM"] else "—")
+    ctx["KITTY_LINE"]    = (f"{ctx['AWARD_KITTY_LOSER']} — {ctx['AWARD_KITTY_GAP']}"
+                           if ctx["AWARD_KITTY_LOSER"] else "—")
+    ctx["TOPSCORE_LINE"] = (f"{ctx['AWARD_TOPSCORE_TEAM']} — {ctx['AWARD_TOPSCORE_POINTS']}"
+                           if ctx["AWARD_TOPSCORE_TEAM"] else "—")
 
-    # Awards from the scores we have (works even if starters hidden)
-    if ctx["GAMES"]:
-        awards = _compute_awards(ctx["GAMES"])
-        ctx.update(awards)
-    else:
-        log.warning("No games found to compute awards")
+    # Legacy aliases that some templates use
+    ctx["CUPCAKE"] = ctx["CUPCAKE_LINE"]
+    ctx["KITTY"]   = ctx["KITTY_LINE"]
+    ctx["TOPSCORE"]= ctx["TOPSCORE_LINE"]
 
     return ctx
-
-# Back-compat alias
-build_context = assemble_context
