@@ -14,13 +14,13 @@ jobs:
 
     # Map GitHub Secrets/Variables into the job's environment
     env:
-  ESPN_S2: ${{ secrets.ESPN_S2 }}
-  SWID: ${{ secrets.SWID }}              # the secret value must look like: {XXXXXXXX-XXXX-...}
-  LEAGUE_ID: ${{ vars.LEAGUE_ID }}
-  YEAR: ${{ vars.YEAR }}
-  TEMPLATE: ${{ vars.TEMPLATE }}
-  OUTDOCX: ${{ vars.OUTDOCX }}
-  TEAM_LOGOS_FILE: ${{ vars.TEAM_LOGOS_FILE }}   # make sure the file really exists at that path
+      ESPN_S2: ${{ secrets.ESPN_S2 }}
+      SWID: ${{ secrets.SWID }}              # the secret value must look like: {XXXXXXXX-XXXX-...}
+      LEAGUE_ID: ${{ vars.LEAGUE_ID }}
+      YEAR: ${{ vars.YEAR }}
+      TEMPLATE: ${{ vars.TEMPLATE }}
+      OUTDOCX: ${{ vars.OUTDOCX }}
+      TEAM_LOGOS_FILE: ${{ vars.TEAM_LOGOS_FILE }}   # make sure the file really exists at that path
 
     steps:
       - name: Checkout
@@ -44,22 +44,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Preflight (print what the app will see)
+      - name: Preflight env check (safe)
         run: |
           python - <<'PY'
-          import os, pathlib, yaml
-          p = pathlib.Path('gazette.yml')
-          cfg = yaml.safe_load(p.read_text()) if p.exists() else {}
-          def present(v): return "present" if v and str(v).strip() else "missing"
-          print("YAML present:", p.exists())
-          print("LEAGUE_ID:", os.environ.get('LEAGUE_ID'))
-          print("YEAR:", os.environ.get('YEAR'))
-          print("TEMPLATE:", os.environ.get('TEMPLATE'))
-          print("OUTDOCX:", os.environ.get('OUTDOCX'))
-          print("TEAM_LOGOS_FILE:", os.environ.get('TEAM_LOGOS_FILE'))
-          print("ESPN_S2:", present(os.environ.get('ESPN_S2')))
-          print("SWID:", present(os.environ.get('SWID')))
-          print("OPENAI_API_KEY:", present(os.environ.get('OPENAI_API_KEY')))
+          import os
+          def safe(v):
+              if not v: return "missing"
+              return f"present(len={len(v)})"
+          print("ESPN_S2:", safe(os.getenv("ESPN_S2")))
+          print("SWID:", safe(os.getenv("SWID")))
+          print("LEAGUE_ID:", os.getenv("LEAGUE_ID"))
+          print("YEAR:", os.getenv("YEAR"))
+          print("TEMPLATE:", os.getenv("TEMPLATE"))
+          print("OUTDOCX:", os.getenv("OUTDOCX"))
+          print("TEAM_LOGOS_FILE:", os.getenv("TEAM_LOGOS_FILE"))
           PY
 
       - name: Build Gazette (Sabre voice on by default)
