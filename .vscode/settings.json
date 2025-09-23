@@ -1,4 +1,10 @@
 {
-    "makefile.configureOnOpen": true,
-    "github-actions.workflows.pinned.workflows": []
+  "yaml.schemas": {
+    "./schemas/gazette.schema.json": [
+      "gazette.yml",
+      "gazette.yaml"
+    ],
+    "https://json.schemastore.org/github-workflow.json": ".github/workflows/*.yml"
+  },
+  "yaml.schemaStore.enable": true
 }

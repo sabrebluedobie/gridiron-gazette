@@ -1,0 +1,20 @@
+# gazette.yml — optional defaults for Gridiron Gazette
+league_id: 887998
+year: 2025
+week: 2            # set 0 to auto-infer
+auto_week: false
+week_offset: 0
+
+template: recap_template.docx
+output_dir: recaps
+
+# Voice & blurbs
+llm_blurbs: true
+blurb_style: sabre
+blurb_words: 200
+
+# Display
+league_display_name: "Browns SEA/KC"
+
+# Logging
+verbose: true

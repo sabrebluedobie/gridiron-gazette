@@ -1,20 +1,98 @@
-# gazette.yml — optional defaults for Gridiron Gazette
-league_id: 887998
-year: 2025
-week: 2            # set 0 to auto-infer
-auto_week: false
-week_offset: 0
+name: Build Gridiron Gazette
 
-template: recap_template.docx
-output_dir: recaps
+on:
+  workflow_dispatch:
+    inputs:
+      league_id:
+        description: "Override league id (optional)"
+        required: false
+        default: ""
+      year:
+        description: "Override season year (optional)"
+        required: false
+        default: ""
+      week:
+        description: "Override week (optional)"
+        required: false
+        default: ""
+      llm_blurbs:
+        description: "Generate Sabre blurbs (true/false)"
+        required: false
+        default: "true"
+  # Uncomment to auto-run every Tuesday at 10:00 AM America/Chicago (UTC-5/UTC-6)
+  # schedule:
+  #   - cron: "0 16 * * 2"  # 16:00 UTC ~ 10:00 AM Central (adjust for DST)
 
-# Voice & blurbs
-llm_blurbs: true
-blurb_style: sabre
-blurb_words: 200
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-# Display
-league_display_name: "Browns SEA/KC"
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
 
-# Logging
-verbose: true
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Use requirements.txt if you have one, otherwise install inline
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          pip install espn-api docxtpl python-docx python-dotenv pyyaml openai requests
+
+      - name: Preflight (sanity print, no secrets)
+        env:
+          ESPN_S2: ${{ secrets.ESPN_S2 }}
+          ESPN_SWID: ${{ secrets.ESPN_SWID }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python - <<'PY'
+          import os, yaml, pathlib
+          p = pathlib.Path('gazette.yml')
+          cfg = yaml.safe_load(p.read_text()) if p.exists() else {}
+          def safe(v): return f"present(len={len(v)})" if v else "missing"
+          print("YAML present:", p.exists())
+          for k in ['league_id','year','week','template','output_dir','blurb_style','blurb_words','llm_blurbs']:
+              print(f"{k}: {cfg.get(k)}")
+          print("ESPN_S2:", safe(os.environ.get('ESPN_S2')))
+          print("SWID:", safe(os.environ.get('ESPN_SWID') or os.environ.get('SWID')))
+          print("OPENAI_API_KEY:", safe(os.environ.get('OPENAI_API_KEY')))
+          PY
+
+      - name: Build Gazette
+        env:
+          ESPN_S2: ${{ secrets.ESPN_S2 || '' }}
+          ESPN_SWID: ${{ secrets.SWID || '' }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || '' }}
+          LEAGUE_ID: ${{ vars.LEAGUE_ID || '' }}
+          YEAR: ${{ vars.YEAR || '' }}
+        run: |
+          set -eux
+          PY_ARGS=()
+          # Allow workflow inputs to override YAML/env
+          if [ -n "${{ github.event.inputs.league_id }}" ]; then PY_ARGS+=(--league "${{ github.event.inputs.league_id }}"); fi
+          if [ -n "${{ github.event.inputs.year }}" ]; then PY_ARGS+=(--year "${{ github.event.inputs.year }}"); fi
+          if [ -n "${{ github.event.inputs.week }}" ]; then PY_ARGS+=(--week "${{ github.event.inputs.week }}"); fi
+
+          # Default to generating blurbs unless explicitly set to 'false'
+          if [ "${{ github.event.inputs.llm_blurbs }}" = "false" ]; then
+            true
+          else
+            PY_ARGS+=(--llm-blurbs)
+          fi
+
+          python build_gazette.py "${PY_ARGS[@]}" --verbose
+
+      - name: Upload Gazette artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gazette
+          path: |
+            recaps/*.docx
+            recaps/*.pdf
+          if-no-files-found: warn
