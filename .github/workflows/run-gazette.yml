@@ -14,17 +14,13 @@ jobs:
 
     # Map GitHub Secrets/Variables into the job's environment
     env:
-      # Secrets
-      ESPN_S2: ${{ secrets.ESPN_S2 }}
-      SWID: ${{ secrets.SWID }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-
-      # Repo-level Variables (Settings → Actions → Variables)
-      LEAGUE_ID: ${{ vars.LEAGUE_ID || '887998' }}
-      YEAR: ${{ vars.YEAR || '2025' }}
-      TEMPLATE: ${{ vars.TEMPLATE || 'recap_template.docx' }}
-      OUTDOCX: ${{ vars.OUTDOCX || 'recaps/Week{week}_Gazette.docx' }}
-      TEAM_LOGOS_FILE: ${{ vars.TEAM_LOGOS_FILE || 'team-logos.json' }}
+  ESPN_S2: ${{ secrets.ESPN_S2 }}
+  SWID: ${{ secrets.SWID }}              # the secret value must look like: {XXXXXXXX-XXXX-...}
+  LEAGUE_ID: ${{ vars.LEAGUE_ID }}
+  YEAR: ${{ vars.YEAR }}
+  TEMPLATE: ${{ vars.TEMPLATE }}
+  OUTDOCX: ${{ vars.OUTDOCX }}
+  TEAM_LOGOS_FILE: ${{ vars.TEAM_LOGOS_FILE }}   # make sure the file really exists at that path
 
     steps:
       - name: Checkout
