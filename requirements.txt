@@ -5,7 +5,7 @@ Jinja2==3.1.4
 lxml==5.3.0
 pillow==10.4.0
 espn_api==0.45.1
-espn-api-football==0.3.4
+espn-api==0.45.1
 openai==1.42.0
 pikepdf==9.2.0
 google-api-python-client==2.145.0
