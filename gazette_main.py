@@ -27,7 +27,7 @@ def setup_environment():
     
     # Validate logo setup
     try:
-        from enhanced_logo_resolver import validate_logo_setup, create_default_logos
+        from logo_resolver import validate_logo_setup, create_default_logos
         
         status = validate_logo_setup()
         logger.info("Logo setup validation completed")
