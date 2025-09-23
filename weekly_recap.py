@@ -43,8 +43,8 @@ except Exception as e:
         return out
 
 
-def _make_aliases(ctx: Dict[str, Any]) -> None:
-    """Create comprehensive aliases for template compatibility"""
+def _make_comprehensive_aliases(ctx: Dict[str, Any]) -> None:
+    """Create EVERY possible alias pattern the template might expect"""
     week = ctx.get("WEEK_NUMBER")
     league = ctx.get("LEAGUE_NAME") or "League"
     
@@ -52,71 +52,202 @@ def _make_aliases(ctx: Dict[str, Any]) -> None:
     ctx.setdefault("TITLE", f"Week {week} Fantasy Football Gazette — {league}")
     ctx.setdefault("SUBTITLE", "For those times when everyone wants to know your score.")
 
-    # Scores & names aliases - support multiple naming conventions
+    # Comprehensive team/score aliases for ALL possible patterns
     for i in range(1, 8):
         home_name = ctx.get(f"MATCHUP{i}_HOME", "")
         away_name = ctx.get(f"MATCHUP{i}_AWAY", "")
         home_score = ctx.get(f"MATCHUP{i}_HS", "")
         away_score = ctx.get(f"MATCHUP{i}_AS", "")
+        home_top_scorer = ctx.get(f"MATCHUP{i}_HOME_TOP_SCORER", "")
+        home_top_points = ctx.get(f"MATCHUP{i}_HOME_TOP_POINTS", "")
+        away_top_scorer = ctx.get(f"MATCHUP{i}_AWAY_TOP_SCORER", "")
+        away_top_points = ctx.get(f"MATCHUP{i}_AWAY_TOP_POINTS", "")
         
-        # Multiple alias patterns
-        aliases = {
+        # EVERY possible naming pattern for teams/scores
+        team_score_aliases = {
+            # Basic patterns
             f"HOME{i}": home_name,
             f"AWAY{i}": away_name,
             f"HNAME{i}": home_name,
             f"ANAME{i}": away_name,
             f"HS{i}": home_score,
             f"AS{i}": away_score,
-            f"HOME{i}_SCORE": home_score,
-            f"AWAY{i}_SCORE": away_score,
+            
+            # Extended patterns
             f"HOME{i}_NAME": home_name,
             f"AWAY{i}_NAME": away_name,
+            f"HOME{i}_SCORE": home_score,
+            f"AWAY{i}_SCORE": away_score,
+            f"MATCHUP{i}_HOME_NAME": home_name,
+            f"MATCHUP{i}_AWAY_NAME": away_name,
+            f"MATCHUP{i}_HOME_SCORE": home_score,
+            f"MATCHUP{i}_AWAY_SCORE": away_score,
+            
+            # Top scorer patterns - CRITICAL for Stats Spotlight
+            f"TOP_SCORER_HOME_{i}": home_top_scorer,
+            f"TOP_SCORER_AWAY_{i}": away_top_scorer,
+            f"TOP_POINTS_HOME_{i}": home_top_points,
+            f"TOP_POINTS_AWAY_{i}": away_top_points,
+            f"HOME{i}_TOP_SCORER": home_top_scorer,
+            f"AWAY{i}_TOP_SCORER": away_top_scorer,
+            f"HOME{i}_TOP_POINTS": home_top_points,
+            f"AWAY{i}_TOP_POINTS": away_top_points,
+            f"MATCHUP{i}_HOME_TOP": home_top_scorer,
+            f"MATCHUP{i}_AWAY_TOP": away_top_scorer,
+            f"MATCHUP{i}_HOME_TOP_PTS": home_top_points,
+            f"MATCHUP{i}_AWAY_TOP_PTS": away_top_points,
+            
+            # More top scorer variations
+            f"TOP_HOME_{i}": home_top_scorer,
+            f"TOP_AWAY_{i}": away_top_scorer,
+            f"TOP_HOME_POINTS_{i}": home_top_points,
+            f"TOP_AWAY_POINTS_{i}": away_top_points,
         }
         
-        for alias, value in aliases.items():
+        for alias, value in team_score_aliases.items():
             ctx.setdefault(alias, value)
 
-        # Top-scorer aliases
-        top_scorer_aliases = {
-            f"TOP_SCORER_HOME_{i}": ctx.get(f"MATCHUP{i}_HOME_TOP_SCORER", ""),
-            f"TOP_SCORER_AWAY_{i}": ctx.get(f"MATCHUP{i}_AWAY_TOP_SCORER", ""),
-            f"TOP_POINTS_HOME_{i}": ctx.get(f"MATCHUP{i}_HOME_TOP_POINTS", ""),
-            f"TOP_POINTS_AWAY_{i}": ctx.get(f"MATCHUP{i}_AWAY_TOP_POINTS", ""),
-            f"HOME{i}_TOP_SCORER": ctx.get(f"MATCHUP{i}_HOME_TOP_SCORER", ""),
-            f"AWAY{i}_TOP_SCORER": ctx.get(f"MATCHUP{i}_AWAY_TOP_SCORER", ""),
-            f"HOME{i}_TOP_POINTS": ctx.get(f"MATCHUP{i}_HOME_TOP_POINTS", ""),
-            f"AWAY{i}_TOP_POINTS": ctx.get(f"MATCHUP{i}_AWAY_TOP_POINTS", ""),
-        }
-        
-        for alias, value in top_scorer_aliases.items():
-            ctx.setdefault(alias, value)
-
-    # Awards aliases - multiple naming patterns
-    awards_base = {
-        "CUPCAKE_LINE": ctx.get("CUPCAKE_LINE", "—"),
-        "KITTY_LINE": ctx.get("KITTY_LINE", "—"),
-        "TOPSCORE_LINE": ctx.get("TOPSCORE_LINE", "—"),
-    }
+    # Awards aliases - CRITICAL for Weekly Awards section
+    cupcake_line = ctx.get("CUPCAKE_LINE", "—")
+    kitty_line = ctx.get("KITTY_LINE", "—") 
+    topscore_line = ctx.get("TOPSCORE_LINE", "—")
     
+    # EVERY possible awards pattern
     awards_aliases = {
-        "CUPCAKE": awards_base["CUPCAKE_LINE"],
-        "KITTY": awards_base["KITTY_LINE"],
-        "TOPSCORE": awards_base["TOPSCORE_LINE"],
-        "AWARD_CUPCAKE": awards_base["CUPCAKE_LINE"],
-        "AWARD_KITTY": awards_base["KITTY_LINE"],
-        "AWARD_TOPSCORE": awards_base["TOPSCORE_LINE"],
-        "CUPCAKE_AWARD": awards_base["CUPCAKE_LINE"],
-        "KITTY_AWARD": awards_base["KITTY_LINE"],
-        "TOPSCORE_AWARD": awards_base["TOPSCORE_LINE"],
-        "WEEKLY_CUPCAKE": awards_base["CUPCAKE_LINE"],
-        "WEEKLY_KITTY": awards_base["KITTY_LINE"],
-        "WEEKLY_TOPSCORE": awards_base["TOPSCORE_LINE"],
+        # Basic awards
+        "CUPCAKE": cupcake_line,
+        "KITTY": kitty_line, 
+        "TOPSCORE": topscore_line,
+        
+        # Award prefix patterns
+        "AWARD_CUPCAKE": cupcake_line,
+        "AWARD_KITTY": kitty_line,
+        "AWARD_TOPSCORE": topscore_line,
+        
+        # Line suffix patterns  
+        "CUPCAKE_AWARD": cupcake_line,
+        "KITTY_AWARD": kitty_line,
+        "TOPSCORE_AWARD": topscore_line,
+        
+        # Weekly prefix patterns
+        "WEEKLY_CUPCAKE": cupcake_line,
+        "WEEKLY_KITTY": kitty_line,
+        "WEEKLY_TOPSCORE": topscore_line,
+        
+        # Individual component patterns
+        "CUPCAKE_TEAM": ctx.get("AWARD_CUPCAKE_TEAM", ""),
+        "CUPCAKE_SCORE": ctx.get("AWARD_CUPCAKE_SCORE", ""),
+        "KITTY_WINNER": ctx.get("AWARD_KITTY_WINNER", ""),
+        "KITTY_LOSER": ctx.get("AWARD_KITTY_LOSER", ""),
+        "KITTY_GAP": ctx.get("AWARD_KITTY_GAP", ""),
+        "TOPSCORE_TEAM": ctx.get("AWARD_TOPSCORE_TEAM", ""),
+        "TOPSCORE_POINTS": ctx.get("AWARD_TOPSCORE_POINTS", ""),
+        
+        # Alternative patterns
+        "LOWEST_SCORE": cupcake_line,
+        "HIGHEST_SCORE": topscore_line,
+        "BIGGEST_BLOWOUT": kitty_line,
+        "WORST_PERFORMANCE": cupcake_line,
+        "BEST_PERFORMANCE": topscore_line,
     }
     
     for alias, value in awards_aliases.items():
         ctx.setdefault(alias, value)
 
-    log.debug(f"Created {len([k for k in ctx.keys() if k not in awards_base])} aliases")
+    log.info(f"Created comprehensive aliases - total context keys: {len(ctx)}")
+
+
+def _inject_template_spotlight_variables(ctx: Dict[str, Any], style: str, words: int) -> None:
+    """
+    Generate and inject ALL possible spotlight variable patterns.
+    This ensures the template finds what it's looking for regardless of naming convention.
+    """
+    log.info(f"Generating comprehensive spotlight variables - style: {style}, words: {words}")
+    
+    try:
+        blocks = generate_spotlights_for_week(ctx, style=style, words=words)
+        log.info(f"Generated spotlights for {len(blocks)} matchups")
+        
+        # Log sample spotlight content for debugging
+        if blocks and "1" in blocks:
+            sample = blocks["1"]
+            log.info(f"Sample spotlight content: home='{sample.get('home', '')[:50]}...'")
+    except Exception as e:
+        log.error(f"Failed to generate spotlights: {e}")
+        blocks = {}
+    
+    # Generate EVERY possible spotlight variable pattern
+    for i in range(1, 8):
+        block = blocks.get(str(i), {})
+        
+        home_spotlight = block.get("home", "")
+        away_spotlight = block.get("away", "")
+        bust_spotlight = block.get("bust", "")
+        key_spotlight = block.get("key", "")
+        def_spotlight = block.get("def", "")
+        
+        # Log what we're injecting for debugging
+        if i <= 2:  # Log first 2 matchups
+            log.info(f"Matchup {i} spotlight injection:")
+            log.info(f"  home: '{home_spotlight[:50]}...'")
+            log.info(f"  away: '{away_spotlight[:50]}...'")
+        
+        # ALL possible spotlight variable patterns
+        spotlight_patterns = {
+            # Primary patterns
+            f"SPOTLIGHT_HOME_{i}": home_spotlight,
+            f"SPOTLIGHT_AWAY_{i}": away_spotlight,
+            f"SPOTLIGHT_BUST_{i}": bust_spotlight,
+            f"SPOTLIGHT_KEYPLAY_{i}": key_spotlight,
+            f"SPOTLIGHT_DEFNOTE_{i}": def_spotlight,
+            f"SPOTLIGHT_KEY_{i}": key_spotlight,
+            f"SPOTLIGHT_DEF_{i}": def_spotlight,
+            
+            # Matchup prefix patterns
+            f"MATCHUP{i}_SPOTLIGHT_HOME": home_spotlight,
+            f"MATCHUP{i}_SPOTLIGHT_AWAY": away_spotlight,
+            f"MATCHUP{i}_SPOTLIGHT_BUST": bust_spotlight,
+            f"MATCHUP{i}_SPOTLIGHT_KEY": key_spotlight,
+            f"MATCHUP{i}_SPOTLIGHT_DEF": def_spotlight,
+            f"MATCHUP{i}_SPOTLIGHT_KEYPLAY": key_spotlight,
+            f"MATCHUP{i}_SPOTLIGHT_DEFNOTE": def_spotlight,
+            
+            # Short patterns
+            f"HOME{i}_SPOTLIGHT": home_spotlight,
+            f"AWAY{i}_SPOTLIGHT": away_spotlight,
+            f"BUST{i}_SPOTLIGHT": bust_spotlight,
+            f"KEY{i}_SPOTLIGHT": key_spotlight,
+            f"DEF{i}_SPOTLIGHT": def_spotlight,
+            
+            # Alternative patterns
+            f"HOME_SPOTLIGHT_{i}": home_spotlight,
+            f"AWAY_SPOTLIGHT_{i}": away_spotlight,
+            f"BUST_SPOTLIGHT_{i}": bust_spotlight,
+            f"KEY_SPOTLIGHT_{i}": key_spotlight,
+            f"DEF_SPOTLIGHT_{i}": def_spotlight,
+            
+            # Descriptive patterns
+            f"TOP_SCORER_HOME_SPOTLIGHT_{i}": home_spotlight,
+            f"TOP_SCORER_AWAY_SPOTLIGHT_{i}": away_spotlight,
+            f"BIGGEST_BUST_SPOTLIGHT_{i}": bust_spotlight,
+            f"KEY_PLAY_SPOTLIGHT_{i}": key_spotlight,
+            f"DEFENSE_NOTE_SPOTLIGHT_{i}": def_spotlight,
+            
+            # Simple patterns the template might expect
+            f"HOME_TOP_SCORER_{i}": home_spotlight,
+            f"AWAY_TOP_SCORER_{i}": away_spotlight,
+            f"BIGGEST_BUST_{i}": bust_spotlight,
+            f"KEY_PLAY_{i}": key_spotlight,
+            f"DEFENSE_NOTE_{i}": def_spotlight,
+        }
+        
+        # Inject all patterns
+        for pattern, value in spotlight_patterns.items():
+            ctx.setdefault(pattern, value)
+    
+    # Count spotlight variables for verification
+    spotlight_vars = {k: v for k, v in ctx.items() if "SPOTLIGHT" in k or "BUST" in k or "KEY" in k or "DEF" in k}
+    log.info(f"Injected {len(spotlight_vars)} spotlight-related variables")
 
 
 def _attach_images(ctx: Dict[str, Any], doc: DocxTemplate) -> None:
@@ -154,7 +285,7 @@ def _attach_images(ctx: Dict[str, Any], doc: DocxTemplate) -> None:
     except Exception as e:
         log.error(f"Error attaching sponsor logo: {e}")
 
-    # Team logos
+    # Team logos with comprehensive alias support
     for i in range(1, 8):
         home_key = f"MATCHUP{i}_HOME"
         away_key = f"MATCHUP{i}_AWAY"
@@ -167,8 +298,14 @@ def _attach_images(ctx: Dict[str, Any], doc: DocxTemplate) -> None:
                 if hp_raw:
                     hp = logos.sanitize_logo_for_docx(hp_raw)
                     if hp and Path(hp).exists():
-                        ctx[f"MATCHUP{i}_HOME_LOGO"] = InlineImage(doc, hp, width=Mm(22))
-                        ctx[f"HOME{i}_LOGO"] = ctx[f"MATCHUP{i}_HOME_LOGO"]  # Alias
+                        home_logo = InlineImage(doc, hp, width=Mm(22))
+                        # ALL possible logo variable patterns
+                        logo_patterns = [
+                            f"MATCHUP{i}_HOME_LOGO", f"HOME{i}_LOGO", 
+                            f"HOME_LOGO_{i}", f"LOGO_HOME_{i}"
+                        ]
+                        for pattern in logo_patterns:
+                            ctx[pattern] = home_logo
                         log.debug(f"Home logo attached for {home_name}: {hp}")
                     else:
                         log.warning(f"Home logo sanitization failed for {home_name}: {hp_raw}")
@@ -185,8 +322,14 @@ def _attach_images(ctx: Dict[str, Any], doc: DocxTemplate) -> None:
                 if ap_raw:
                     ap = logos.sanitize_logo_for_docx(ap_raw)
                     if ap and Path(ap).exists():
-                        ctx[f"MATCHUP{i}_AWAY_LOGO"] = InlineImage(doc, ap, width=Mm(22))
-                        ctx[f"AWAY{i}_LOGO"] = ctx[f"MATCHUP{i}_AWAY_LOGO"]  # Alias
+                        away_logo = InlineImage(doc, ap, width=Mm(22))
+                        # ALL possible logo variable patterns
+                        logo_patterns = [
+                            f"MATCHUP{i}_AWAY_LOGO", f"AWAY{i}_LOGO",
+                            f"AWAY_LOGO_{i}", f"LOGO_AWAY_{i}"
+                        ]
+                        for pattern in logo_patterns:
+                            ctx[pattern] = away_logo
                         log.debug(f"Away logo attached for {away_name}: {ap}")
                     else:
                         log.warning(f"Away logo sanitization failed for {away_name}: {ap_raw}")
@@ -196,58 +339,8 @@ def _attach_images(ctx: Dict[str, Any], doc: DocxTemplate) -> None:
                 log.error(f"Error attaching away logo {i}: {e}")
 
 
-def _inject_spotlights(ctx: Dict[str, Any], style: str, words: int) -> None:
-    """
-    Populate per-matchup spotlights. Uses LLM if available, otherwise stat fallback.
-    Creates both generic keys and alias keys used by older templates.
-    """
-    log.info(f"Generating spotlights with style '{style}', target {words} words")
-    
-    try:
-        blocks = generate_spotlights_for_week(ctx, style=style, words=words)
-        log.info(f"Generated spotlights for {len(blocks)} matchups")
-    except Exception as e:
-        log.error(f"Failed to generate spotlights: {e}")
-        blocks = {}
-    
-    for i in range(1, 8):
-        b = blocks.get(str(i), {})
-        
-        # Canonical keys expected by newer templates
-        spotlight_keys = {
-            f"SPOTLIGHT_HOME_{i}": b.get("home", ""),
-            f"SPOTLIGHT_AWAY_{i}": b.get("away", ""),
-            f"SPOTLIGHT_BUST_{i}": b.get("bust", ""),
-            f"SPOTLIGHT_KEYPLAY_{i}": b.get("key", ""),
-            f"SPOTLIGHT_DEFNOTE_{i}": b.get("def", ""),
-        }
-        
-        for key, value in spotlight_keys.items():
-            ctx.setdefault(key, value)
-
-        # Popular alias keys some docs use
-        alias_keys = {
-            f"MATCHUP{i}_SPOTLIGHT_HOME": ctx[f"SPOTLIGHT_HOME_{i}"],
-            f"MATCHUP{i}_SPOTLIGHT_AWAY": ctx[f"SPOTLIGHT_AWAY_{i}"],
-            f"MATCHUP{i}_SPOTLIGHT_BUST": ctx[f"SPOTLIGHT_BUST_{i}"],
-            f"MATCHUP{i}_SPOTLIGHT_KEY":  ctx[f"SPOTLIGHT_KEYPLAY_{i}"],
-            f"MATCHUP{i}_SPOTLIGHT_DEF":  ctx[f"SPOTLIGHT_DEFNOTE_{i}"],
-            # Additional common patterns
-            f"HOME{i}_SPOTLIGHT": ctx[f"SPOTLIGHT_HOME_{i}"],
-            f"AWAY{i}_SPOTLIGHT": ctx[f"SPOTLIGHT_AWAY_{i}"],
-            f"BUST{i}_SPOTLIGHT": ctx[f"SPOTLIGHT_BUST_{i}"],
-            f"KEY{i}_SPOTLIGHT": ctx[f"SPOTLIGHT_KEYPLAY_{i}"],
-            f"DEF{i}_SPOTLIGHT": ctx[f"SPOTLIGHT_DEFNOTE_{i}"],
-        }
-        
-        for key, value in alias_keys.items():
-            ctx.setdefault(key, value)
-
-    log.debug(f"Injected spotlights with {len([k for k in ctx.keys() if 'SPOTLIGHT' in k])} spotlight keys")
-
-
 def render_docx(template_path: str, outdocx: str, context: Dict[str, Any]) -> str:
-    """Render the complete DOCX with all enhancements"""
+    """Render the complete DOCX with comprehensive template variable support"""
     log.info(f"Rendering DOCX from template: {template_path}")
     log.info(f"Output path: {outdocx}")
     
@@ -258,12 +351,12 @@ def render_docx(template_path: str, outdocx: str, context: Dict[str, Any]) -> st
         doc = DocxTemplate(template_path)
         log.info("Template loaded successfully")
         
-        # Process context step by step
-        log.info("Creating aliases...")
-        _make_aliases(context)
+        # Process context with comprehensive variable generation
+        log.info("Creating comprehensive aliases...")
+        _make_comprehensive_aliases(context)
         
-        log.info("Injecting spotlights...")
-        _inject_spotlights(
+        log.info("Injecting comprehensive spotlight variables...")
+        _inject_template_spotlight_variables(
             context, 
             style=context.get("BLURB_STYLE", "sabre"), 
             words=int(context.get("BLURB_WORDS", 200))
@@ -271,6 +364,13 @@ def render_docx(template_path: str, outdocx: str, context: Dict[str, Any]) -> st
         
         log.info("Attaching images...")
         _attach_images(context, doc)
+        
+        # Log final context summary for debugging
+        total_vars = len(context)
+        spotlight_vars = len([k for k in context.keys() if "SPOTLIGHT" in k])
+        award_vars = len([k for k in context.keys() if any(x in k for x in ["CUPCAKE", "KITTY", "TOPSCORE"])])
+        
+        log.info(f"Final context: {total_vars} total vars, {spotlight_vars} spotlight vars, {award_vars} award vars")
         
         # Ensure output directory exists
         Path(outdocx).parent.mkdir(parents=True, exist_ok=True)
@@ -300,7 +400,7 @@ def build_weekly_recap(
     blurb_style: str = "sabre",
     blurb_words: int = 200,
 ) -> str:
-    """Build complete weekly recap with robust error handling"""
+    """Build complete weekly recap with comprehensive template variable support"""
     log.info(f"Building weekly recap - League: {league_id}, Year: {year}, Week: {week}")
     log.info(f"Template: {template}")
     log.info(f"LLM Blurbs: {llm_blurbs}, Style: {blurb_style}, Words: {blurb_words}")
