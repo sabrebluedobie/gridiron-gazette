@@ -27,7 +27,7 @@ except Exception as e:
     print("❌ Missing dependency: espn_api. `pip install espn-api`", file=sys.stderr)
     raise
 
-import updated_weekly_recap
+import updated_weekly_recap as weekly_recap
 
 LOG = logging.getLogger("build_gazette")
 
@@ -113,7 +113,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     week = _infer_week(args.auto_week or args.week == 0, args.week, args.week_offset)
     LOG.info("Using week=%s", week)
 
-    outdoc = updated_weekly_recap.build_weekly_recap(
+    outdoc = weekly_recap.build_weekly_recap(
         league=league,                 # may be None
         league_id=args.league,
         year=args.year,
