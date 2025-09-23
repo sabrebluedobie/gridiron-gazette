@@ -30,19 +30,45 @@ jobs:
           fi
           pip install espn-api docxtpl python-docx python-dotenv pyyaml openai requests
 
-      # Export all secrets/vars to the job environment (no linter warnings)
+      # Export Secrets & Variables if present (no linter warnings)
       - name: Export repo Secrets & Variables to $GITHUB_ENV
         run: |
-          {
-            echo "ESPN_S2=${{ secrets.ESPN_S2 }}"
-            echo "SWID=${{ secrets.SWID }}"
-            echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}"
-            echo "LEAGUE_ID=${{ vars.LEAGUE_ID }}"
-            echo "YEAR=${{ vars.YEAR }}"
-            echo "TEMPLATE=${{ vars.TEMPLATE }}"
-            echo "OUTDOCX=${{ vars.OUTDOCX }}"
-            echo "FANTASY_SEASON_START=${{ vars.FANTASY_SEASON_START }}"
-          } >> "$GITHUB_ENV"
+          # Secrets (write whatever exists)
+          echo "ESPN_S2=${{ secrets.ESPN_S2 }}" >> "$GITHUB_ENV"
+          # Prefer SWID, but fall back to ESPN_SWID if that’s what you stored
+          swid="${{ secrets.SWID }}"
+          if [ -z "$swid" ]; then swid="${{ secrets.ESPN_SWID }}"; fi
+          echo "SWID=$swid" >> "$GITHUB_ENV"
+          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> "$GITHUB_ENV"
+
+          # Variables (may be unset; we’ll fill from YAML later)
+          echo "LEAGUE_ID=${{ vars.LEAGUE_ID }}" >> "$GITHUB_ENV"
+          echo "YEAR=${{ vars.YEAR }}" >> "$GITHUB_ENV"
+          echo "TEMPLATE=${{ vars.TEMPLATE }}" >> "$GITHUB_ENV"
+          echo "OUTDOCX=${{ vars.OUTDOCX }}" >> "$GITHUB_ENV"
+          echo "FANTASY_SEASON_START=${{ secrets.FANTASY_SEASON_START }}" >> "$GITHUB_ENV"
+
+      # Fill any missing env from gazette.yml (root) without leaking secrets
+      - name: Fill missing env from gazette.yml
+        run: |
+          python - <<'PY'
+          import os, pathlib, yaml
+          p = pathlib.Path('gazette.yml')
+          cfg = yaml.safe_load(p.read_text()) if p.exists() else {}
+          def put(k, v):
+              if v is None: return
+              with open(os.environ['GITHUB_ENV'], 'a') as f:
+                  print(f"{k}={v}", file=f)
+          # only write if missing/empty in env
+          if not os.getenv('LEAGUE_ID') and cfg.get('league_id') is not None:
+              put('LEAGUE_ID', cfg.get('league_id'))
+          if not os.getenv('YEAR') and cfg.get('year') is not None:
+              put('YEAR', cfg.get('year'))
+          if not os.getenv('TEMPLATE') and cfg.get('template'):
+              put('TEMPLATE', cfg.get('template'))
+          if not os.getenv('OUTDOCX') and cfg.get('output_dir'):
+              put('OUTDOCX', cfg.get('output_dir'))
+          PY
 
       - name: Preflight (sanity print, no secrets)
         run: |
@@ -74,15 +100,12 @@ jobs:
           : "${YEAR:=2025}"
 
           PY_ARGS=()
+          # Optional workflow input to override week
           if [ -n "${{ github.event.inputs.week }}" ]; then
             PY_ARGS+=(--week "${{ github.event.inputs.week }}")
           fi
 
-          if [ -z "${LEAGUE_ID:-}" ]; then
-            echo "❌ LEAGUE_ID is not set (Settings → Actions → Variables)."
-            exit 1
-          fi
-
+          # Let build_gazette.py fall back to YAML if LEAGUE_ID wasn’t set
           python build_gazette.py --llm-blurbs --verbose "${PY_ARGS[@]}"
 
       - name: Upload Gazette artifact
