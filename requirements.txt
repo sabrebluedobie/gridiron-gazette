@@ -1,14 +1,26 @@
+# --- ESPN / HTTP ---
+espn-api==0.45.1
+requests>=2.31.0
+
+# --- DOCX templating/rendering ---
 docxtpl==0.16.7
 python-docx==1.1.2
 docxcompose==1.4.0
 Jinja2==3.1.4
 lxml>=5.3
 pillow>=10
-espn_api==0.45.1
+
+# --- LLM (Sabre blurbs) ---
 openai>=1.0.0
+
+# --- YAML / environment ---
+PyYAML>=6.0.2
+python-dotenv>=1.0.1
+
+# --- PDF (optional, if you export PDFs) ---
 pikepdf>=9.0.0
+
+# --- Google APIs (optional, if you use Drive/Docs) ---
 google-api-python-client>=2.145.0
 google-auth>=2.33.0
 google-auth-oauthlib>=1.2.1
-pyyaml>=6.0
-

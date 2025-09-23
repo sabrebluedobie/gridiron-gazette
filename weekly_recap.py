@@ -80,13 +80,73 @@ def build_weekly_recap(
     year: int,
     week: int,
     template: Optional[str] = None,
-    output_dir: str = "recaps",   # may be a directory OR a filename *.docx
+    output_dir: str = "recaps",   # may be a directory OR a filename with {tokens}
     llm_blurbs: bool = False,
     blurb_style: str = "sabre",
     blurb_words: int = 200,
 ) -> str:
     template_path = template or "recap_template.docx"
     doc = DocxTemplate(template_path)
+
+    ctx = gazette_data.assemble_context(str(league_id), year, week, llm_blurbs=False, blurb_style=blurb_style)
+    games = ctx.get("GAMES", [])
+
+    if llm_blurbs and games:
+        try:
+            blurbs = storymaker.generate_blurbs(league, year, week, style=blurb_style, max_words=blurb_words, games=games)
+            for i, g in enumerate(games):
+                if i < len(blurbs):
+                    g["RECAP"] = blurbs[i]
+        except Exception as e:
+            print(f"[blurbs] fallback to basic recaps: {e}")
+
+    derived = _compute_top_bust_from_board(league, week)
+    for i, g in enumerate(games):
+        if i < len(derived):
+            g.setdefault("TOP_HOME", derived[i].get("TOP_HOME",""))
+            g.setdefault("TOP_AWAY", derived[i].get("TOP_AWAY",""))
+            g.setdefault("BUST",     derived[i].get("BUST",""))
+
+    _attach_team_logos(doc, games)
+    ctx["GAMES"] = games
+    ctx.setdefault("LEAGUE_LOGO_NAME", ctx.get("LEAGUE_NAME", "Gridiron Gazette"))
+    _attach_special_logos(doc, ctx)
+    _map_front_page_slots(ctx)
+
+    # --------- filename logic (supports tokens) ----------
+    from pathlib import Path
+    out_hint = Path(output_dir)
+    league_name = (ctx.get("LEAGUE_NAME") or ctx.get("LEAGUE_LOGO_NAME") or "League").strip()
+
+    # Build token map (simple + padded week)
+    tokens = {
+        "week": str(week),
+        "week02": f"{week:02d}",
+        "year": str(year),
+        "league": league_name,
+    }
+
+    def fill_tokens(s: str) -> str:
+        # minimal safe formatter for {week}, {week02}, {year}, {league}
+        for k, v in tokens.items():
+            s = s.replace("{"+k+"}", v)
+        return s
+
+    if out_hint.suffix.lower() == ".docx":
+        # Treat OUTDOCX as a FILENAME template (apply tokens)
+        out_path = Path(fill_tokens(str(out_hint)))
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        # Treat OUTDOCX as a DIRECTORY
+        d = out_hint
+        d.mkdir(parents=True, exist_ok=True)
+        out_path = d / f"gazette_week_{week}.docx"
+    # -----------------------------------------------------
+
+    doc.render(ctx)
+    doc.save(out_path)
+    return str(out_path)
+
 
     ctx = gazette_data.assemble_context(str(league_id), year, week, llm_blurbs=False, blurb_style=blurb_style)
     games = ctx.get("GAMES", [])
