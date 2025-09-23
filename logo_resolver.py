@@ -40,15 +40,17 @@ def _load_json(path: Path) -> Dict[str, str]:
         return {}
 
 def _norm(s: str) -> str:
-    """Normalize team name for matching"""
+    """Normalize team name for matching - aggressive character removal"""
     if not s:
         return ""
     s = str(s).lower().strip()
-    # Remove common punctuation and special characters, but preserve alphanumeric
-    s = re.sub(r"[^\w\s]", "", s)  # Remove punctuation except word chars and spaces
-    s = re.sub(r"\s+", "_", s)     # Replace spaces with underscores
-    s = re.sub(r"_+", "_", s)      # Collapse multiple underscores
-    s = s.strip("_")               # Remove leading/trailing underscores
+    
+    # Remove ALL special characters (emojis, punctuation, etc.) - keep only letters, numbers, spaces
+    s = re.sub(r"[^a-zA-Z0-9\s]", "", s)  # Remove everything except alphanumeric and spaces
+    s = re.sub(r"\s+", "_", s)            # Replace spaces with underscores
+    s = re.sub(r"_+", "_", s)             # Collapse multiple underscores
+    s = s.strip("_")                      # Remove leading/trailing underscores
+    
     return s
 
 def _build_filesystem_logo_map() -> Dict[str, str]:
@@ -143,40 +145,72 @@ def _get_filesystem_logo_map() -> Dict[str, str]:
     return _FILESYSTEM_LOGO_MAP
 
 def team_logo(team_name: str) -> Optional[str]:
-    """Get team logo path with comprehensive filesystem scanning"""
+    """Get team logo path - prioritize JSON mapping over filesystem scanning"""
     if not team_name:
         return str(DEFAULT_TEAM_LOGO) if DEFAULT_TEAM_LOGO.exists() else None
     
     log.debug(f"Looking for team logo: '{team_name}'")
     
-    # 1. Try JSON mapping first (if available)
+    # 1. PRIORITIZE JSON mapping - use exact team names as keys
     try:
         data = _load_json(Path(TEAM_LOGOS_FILE))
         if data:
-            # Handle flat mapping
-            if all(isinstance(v, str) for v in data.values()):
-                norm_team = _norm(team_name)
-                if norm_team in {_norm(k): v for k, v in data.items()}:
-                    json_path = next(v for k, v in data.items() if _norm(k) == norm_team)
+            # Direct exact match first
+            if team_name in data:
+                json_path = data[team_name]
+                if Path(json_path).exists():
+                    log.info(f"JSON exact match: '{team_name}' -> {json_path}")
+                    return str(Path(json_path))
+            
+            # Handle hierarchical structure if present
+            if not all(isinstance(v, str) for v in data.values()):
+                league_id = os.getenv("LEAGUE_ID", "")
+                league_name = os.getenv("LEAGUE_DISPLAY_NAME") or os.getenv("LEAGUE_NAME", "")
+                
+                # Check default section
+                default_map = data.get("default", {})
+                if isinstance(default_map, dict) and team_name in default_map:
+                    json_path = default_map[team_name]
                     if Path(json_path).exists():
-                        log.debug(f"JSON logo match: {team_name} -> {json_path}")
+                        log.info(f"JSON default match: '{team_name}' -> {json_path}")
                         return str(Path(json_path))
+                
+                # Check league-specific sections
+                leagues = data.get("leagues", {})
+                if isinstance(leagues, dict):
+                    if league_id and league_id in leagues:
+                        league_data = leagues[league_id]
+                        if isinstance(league_data, dict) and team_name in league_data:
+                            json_path = league_data[team_name]
+                            if Path(json_path).exists():
+                                log.info(f"JSON league ID match: '{team_name}' -> {json_path}")
+                                return str(Path(json_path))
+                    
+                    if league_name and league_name in leagues:
+                        league_data = leagues[league_name]
+                        if isinstance(league_data, dict) and team_name in league_data:
+                            json_path = league_data[team_name]
+                            if Path(json_path).exists():
+                                log.info(f"JSON league name match: '{team_name}' -> {json_path}")
+                                return str(Path(json_path))
+            
     except Exception as e:
-        log.debug(f"JSON lookup failed: {e}")
+        log.warning(f"JSON lookup failed for '{team_name}': {e}")
     
-    # 2. Use comprehensive filesystem mapping
+    # 2. Fallback to filesystem scanning (only if JSON fails)
+    log.debug(f"JSON lookup failed, trying filesystem for: '{team_name}'")
     filesystem_map = _get_filesystem_logo_map()
     logo_path = _fuzzy_match_logo(team_name, filesystem_map)
     if logo_path and Path(logo_path).exists():
-        log.debug(f"Filesystem logo match: {team_name} -> {logo_path}")
+        log.info(f"Filesystem fallback match: '{team_name}' -> {logo_path}")
         return logo_path
     
     # 3. Default fallback
     if DEFAULT_TEAM_LOGO.exists():
-        log.debug(f"Using default logo for: {team_name}")
+        log.warning(f"Using default logo for: '{team_name}'")
         return str(DEFAULT_TEAM_LOGO)
     
-    log.warning(f"No logo found for team: {team_name}")
+    log.error(f"No logo found for team: '{team_name}'")
     return None
 
 def league_logo(name: Optional[str] = None) -> Optional[str]:
