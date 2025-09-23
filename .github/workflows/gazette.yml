@@ -1,152 +1,20 @@
-name: Gazette Builder
+# gazette.yml — optional defaults for Gridiron Gazette
+league_id: 887998
+year: 2025
+week: 2            # set 0 to auto-infer
+auto_week: false
+week_offset: 0
 
-on:
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: "Run mode: single or multi"
-        required: true
-        default: "single"
-        type: choice
-        options: ["single", "multi"]
-      week:
-        description: "Explicit week (optional)"
-        required: false
-        type: string
-      auto_week:
-        description: "Use auto-week?"
-        required: false
-        default: "true"
-        type: choice
-        options: ["true", "false"]
-      llm_blurbs:
-        description: "Generate LLM blurbs?"
-        required: false
-        default: "true"
-        type: choice
-        options: ["true", "false"]
-      blurb_style:
-        description: "Blurb style"
-        required: false
-        default: "sabre"
-        type: string
-  schedule:
-    # Tuesdays 15:00 UTC (~9a CST, 10a CDT)
-    - cron: "0 15 * * 2"
+template: recap_template.docx
+output_dir: recaps
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    environment: "production"   # <-- must match your Environment name
-    env:
-      ESPN_S2: ${{ secrets.ESPN_S2 }}
-      ESPN_SWID: ${{ secrets.SWID }}          # you named it SWID in the env
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+# Voice & blurbs
+llm_blurbs: true
+blurb_style: sabre
+blurb_words: 200
 
-      # Optional: your Environment VARIABLES (non-secret)
-      LEAGUE_ID: ${{ vars.LEAGUE_ID }}
-      YEAR: ${{ vars.YEAR }}
-      TEMPLATE: ${{ vars.TEMPLATE }}
-      OUTDOCX: ${{ vars.OUTDOCX }}
+# Display
+league_display_name: "Browns SEA/KC"
 
-    steps:
-      - name: Check ESPN envs
-        env:
-          ESPN_S2: ${{ secrets.ESPN_S2 }}
-          SWID:    ${{ secrets.SWID }}
-        run: |
-          echo "::add-mask::${ESPN_S2}"
-          echo "::add-mask::${SWID}"
-          test -n "${ESPN_S2}" && echo "ESPN_S2 present" || (echo "ESPN_S2 missing"; exit 1)
-          test -n "${SWID}"    && echo "SWID present"    || (echo "SWID missing"; exit 1)
-
-        
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Create & activate venv, install deps
-        run: |
-          python -m venv .venv
-          source .venv/bin/activate
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Install LibreOffice, Ghostscript, and fonts
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libreoffice ghostscript fontconfig \
-            fonts-inter fonts-dejavu fonts-liberation fonts-noto-core
-          fc-cache -f -v
-
-      - name: Verify environment
-        run: |
-          echo "Checking environment variables..."
-          echo "LEAGUE_ID: ${{ vars.LEAGUE_ID }}"
-          echo "ESPN_S2 length: ${#ESPN_S2}"
-          echo "SWID: $SWID"
-          echo "OpenAI API Key set: $(test -n "$OPENAI_API_KEY" && echo 'yes' || echo 'no')"
-
-      - name: Run Gazette build
-        run: |
-          set -e
-          source .venv/bin/activate
-
-          # Determine week
-          WEEK_FLAG=""
-          if [ "${{ github.event.inputs.auto_week || 'true' }}" = "true" ]; then
-            WEEK_FLAG="--auto-week"
-          else
-            W="${{ github.event.inputs.week }}"
-            if [ -z "$W" ]; then W="1"; fi
-            WEEK_FLAG="--week $W"
-          fi
-
-          # LLM flag
-          LLM_FLAG=""
-          if [ "${{ github.event.inputs.llm_blurbs || 'true' }}" = "true" ]; then
-            LLM_FLAG="--llm-blurbs"
-          fi
-
-          MODE="${{ github.event.inputs.mode || 'single' }}"
-          BLURB_STYLE="${{ github.event.inputs.blurb_style || 'sabre' }}"
-
-          echo "=== Build Configuration ==="
-          echo "Mode: $MODE"
-          echo "Auto-week: $([ "${{ github.event.inputs.auto_week || 'true' }}" = "true" ] && echo yes || echo no)"
-          echo "LLM Blurbs: $([ "${{ github.event.inputs.llm_blurbs || 'true' }}" = "true" ] && echo yes || echo no)"
-          echo "Blurb Style: $BLURB_STYLE"
-          echo "League ID: $LEAGUE_ID"
-          echo
-
-          # Run the build
-          if [ "$MODE" = "single" ]; then
-            python build_gazette.py \
-              --league-id "$LEAGUE_ID" \
-              --year "$(date +%Y)" \
-              $WEEK_FLAG \
-              $LLM_FLAG \
-              --blurb-style "$BLURB_STYLE" \
-              --output-dir recaps
-          else
-            python weekly_recap_multi.py \
-              $WEEK_FLAG \
-              $LLM_FLAG \
-              --blurb-style "$BLURB_STYLE" \
-              --output-dir recaps
-          fi
-
-      - name: Upload recaps
-        uses: actions/upload-artifact@v4
-        with:
-          name: recaps
-          path: |
-            recaps/*.docx
-            recaps/*.pdf
-            recaps/*.pdfa.pdf
+# Logging
+verbose: true
