@@ -1,20 +1,28 @@
-# gazette.yml — optional defaults for Gridiron Gazette
+# gazette.yml — Gridiron Gazette defaults (keep this OUT of .github/workflows)
+
+# --- League & timing ---
 league_id: 887998
 year: 2025
-week: 2            # set 0 to auto-infer
-auto_week: false
+# 0 lets CLI/auto-week or workflow input decide the week
+week: 0
+auto_week: true
 week_offset: 0
 
+# --- Display ---
+league_display_name: "Browns SEA/KC"
 template: recap_template.docx
-output_dir: recaps
 
-# Voice & blurbs
+# Can use tokens: {week}, {week02}, {year}, {league}
+outdocx: "recaps/Week{week}_Gazette.docx"
+
+# --- Voice & blurbs ---
 llm_blurbs: true
 blurb_style: sabre
 blurb_words: 200
 
-# Display
-league_display_name: "Browns SEA/KC"
+# --- Logos ---
+# The code reads TEAM_LOGOS_FILE from the environment; this is just documentation.
+logos_file: "team-logos.json"
 
-# Logging
+# --- Logging ---
 verbose: true
