@@ -1,5 +1,5 @@
 # --- ESPN / HTTP ---
-espn-api==0.45.1
+espn_api==0.45.1
 requests>=2.31.0
 
 # --- DOCX templating/rendering ---
