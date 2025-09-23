@@ -10,20 +10,11 @@ import logo_resolver as logos
 
 
 def _make_aliases(ctx: Dict[str, Any]) -> None:
-    """
-    Populate extra keys so older/newer DOCX templates with different
-    placeholder names still get values. Non-destructive.
-    """
     week = ctx.get("WEEK_NUMBER")
     league = ctx.get("LEAGUE_NAME") or "League"
-
-    # Title/subtitle defaults
     ctx.setdefault("TITLE", f"Week {week} Fantasy Football Gazette — {league}")
     ctx.setdefault("SUBTITLE", "For those times when everyone wants to know your score.")
-
-    # Per-matchup aliases (cover up to 7 rows for safety)
     for i in range(1, 8):
-        # Names
         for a, b in (
             (f"HOME{i}",        f"MATCHUP{i}_HOME"),
             (f"AWAY{i}",        f"MATCHUP{i}_AWAY"),
@@ -32,8 +23,6 @@ def _make_aliases(ctx: Dict[str, Any]) -> None:
         ):
             if b in ctx and a not in ctx:
                 ctx[a] = ctx[b]
-
-        # Scores
         for a, b in (
             (f"HS{i}",          f"MATCHUP{i}_HS"),
             (f"AS{i}",          f"MATCHUP{i}_AS"),
@@ -42,8 +31,6 @@ def _make_aliases(ctx: Dict[str, Any]) -> None:
         ):
             if b in ctx and a not in ctx:
                 ctx[a] = ctx[b]
-
-        # Top scorers (multiple variants)
         alias_pairs = [
             (f"MATCHUP{i}_TOP_SCORER_HOME", f"MATCHUP{i}_HOME_TOP_SCORER"),
             (f"MATCHUP{i}_TOP_SCORER_AWAY", f"MATCHUP{i}_AWAY_TOP_SCORER"),
@@ -57,8 +44,6 @@ def _make_aliases(ctx: Dict[str, Any]) -> None:
         for a, b in alias_pairs:
             if b in ctx and a not in ctx:
                 ctx[a] = ctx[b]
-
-    # Awards: provide multiple popular keys
     awards = {
         "CUPCAKE":         ctx.get("CUPCAKE_LINE", "—"),
         "KITTY":           ctx.get("KITTY_LINE", "—"),
@@ -78,43 +63,37 @@ def _make_aliases(ctx: Dict[str, Any]) -> None:
         ctx.setdefault(k, v)
 
 
-def _attach_images(ctx: Dict[str, Any], template_path: str) -> None:
-    """
-    Resolve and attach logos as InlineImage objects for docxtpl.
-    Uses the actual template_path to build InlineImage instances (safer in CI).
-    """
-    t = DocxTemplate(template_path)
-
-    # League and sponsor
+def _attach_images(ctx: Dict[str, Any], doc: DocxTemplate) -> None:
+    # League & sponsor
     league_name = str(ctx.get("LEAGUE_NAME") or "")
     sponsor_name = str(ctx.get("SPONSOR_NAME") or "Gridiron Gazette")
 
     lg = logos.league_logo(league_name)
     if lg and Path(lg).exists():
-        ctx["LEAGUE_LOGO"] = InlineImage(t, lg, width=Mm(25))
+        ctx["LEAGUE_LOGO"] = InlineImage(doc, lg, width=Mm(25))
 
     sp = logos.sponsor_logo(sponsor_name)
     if sp and Path(sp).exists():
-        ctx["SPONSOR_LOGO"] = InlineImage(t, sp, width=Mm(25))
+        ctx["SPONSOR_LOGO"] = InlineImage(doc, sp, width=Mm(25))
 
-    # Matchup team logos
+    # Team logos per matchup
     for i in range(1, 8):
         hkey, akey = f"MATCHUP{i}_HOME", f"MATCHUP{i}_AWAY"
         if hkey in ctx and ctx[hkey]:
             hp = logos.team_logo(str(ctx[hkey]))
             if hp and Path(hp).exists():
-                ctx[f"MATCHUP{i}_HOME_LOGO"] = InlineImage(t, hp, width=Mm(22))
+                ctx[f"MATCHUP{i}_HOME_LOGO"] = InlineImage(doc, hp, width=Mm(22))
         if akey in ctx and ctx[akey]:
             ap = logos.team_logo(str(ctx[akey]))
             if ap and Path(ap).exists():
-                ctx[f"MATCHUP{i}_AWAY_LOGO"] = InlineImage(t, ap, width=Mm(22))
+                ctx[f"MATCHUP{i}_AWAY_LOGO"] = InlineImage(doc, ap, width=Mm(22))
 
 
 def render_docx(template_path: str, outdocx: str, context: Dict[str, Any]) -> str:
-    _make_aliases(context)
-    _attach_images(context, template_path)
-
+    # Create ONE DocxTemplate instance and reuse for images + render
     doc = DocxTemplate(template_path)
+    _make_aliases(context)
+    _attach_images(context, doc)
     Path(outdocx).parent.mkdir(parents=True, exist_ok=True)
     doc.render(context)
     doc.save(outdocx)
@@ -132,15 +111,10 @@ def build_weekly_recap(
     blurb_style: str = "sabre",
     blurb_words: int = 200,
 ) -> str:
-    """
-    Assemble context and render the weekly recap into DOCX.
-    Sabre blurbs are handled elsewhere; this focuses on ESPN data + awards + logos.
-    """
     ctx = build_context(league_id=league_id, year=year, week=week)
     ctx.setdefault("BLURB_STYLE", blurb_style)
     ctx.setdefault("BLURB_WORDS", blurb_words)
 
-    # Output tokens: {week}, {week02}, {year}, {league}
     week_num = int(ctx.get("WEEK_NUMBER", week or 0) or 0)
     league_name = ctx.get("LEAGUE_NAME", "League")
     out_token = output_dir
