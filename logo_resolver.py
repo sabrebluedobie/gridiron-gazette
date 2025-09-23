@@ -52,7 +52,7 @@ def _build_team_map() -> Dict[str, str]:
 
     # Hierarchical: { "default": {...}, "leagues": { "887998": {...}, "Browns SEA/KC": {...}}}
     league_id = os.getenv("LEAGUE_ID") or ""
-    league_name = os.getenv("LEAGUE_DISPLAY_NAME") or ""
+    league_name = os.getenv("LEAGUE_DISPLAY_NAME") or os.getenv("LEAGUE_NAME") or ""
 
     default_map = data.get("default") or {}
     for k, v in default_map.items():
@@ -110,7 +110,7 @@ def team_logo(team_name: str) -> Optional[str]:
     if not norm:
         return str(DEFAULT_TEAM_LOGO) if DEFAULT_TEAM_LOGO.exists() else None
 
-    # 1) JSON mapping (as in commit 8df2db8 where filenames were lowercased)
+    # 1) JSON mapping (like commit 8df2db8—lowercased filenames ok)
     jmap = _json_team_map()
     if norm in jmap:
         p = Path(jmap[norm])
@@ -129,12 +129,11 @@ def team_logo(team_name: str) -> Optional[str]:
 
 def _find_brand_logo(display_name: str, json_file: str, default_dir: Path) -> Optional[str]:
     """
-    Generic lookup used by league_logo/sponsor_logo to mimic gazette_helpers.find_* from 8df2db8.
     Priority:
       1) exact key in JSON -> path exists
       2) slug-match key in JSON -> path exists
-      3) scan default_dir for a slugged filename (e.g., BrownSeaKC -> brownseakc.png)
-      4) None if not found
+      3) scan default_dir for a slugged filename
+      4) None
     """
     nm = display_name or ""
     slug = _norm(nm)
@@ -159,12 +158,38 @@ def _find_brand_logo(display_name: str, json_file: str, default_dir: Path) -> Op
     return None
 
 def league_logo(name: Optional[str] = None) -> Optional[str]:
-    # prefer explicit arg, then env/cfg
     league_name = name or os.getenv("LEAGUE_DISPLAY_NAME") or os.getenv("LEAGUE_NAME") or ""
-    # Support the 8df2db8 behavior: league_logos.json + logos/league_logos/
     return _find_brand_logo(league_name, LEAGUE_LOGOS_FILE, DEFAULT_LEAGUE_DIR)
 
 def sponsor_logo(name: Optional[str] = None) -> Optional[str]:
     sponsor_name = name or os.getenv("SPONSOR_NAME") or "Gridiron Gazette"
-    # Support the 8df2db8 behavior: sponsor_logos.json + logos/sponsor_logos/
     return _find_brand_logo(sponsor_name, SPONSOR_LOGOS_FILE, DEFAULT_SPONSOR_DIR)
+
+# --- image sanitation for docx ---
+from PIL import Image, UnidentifiedImageError
+
+_CACHE_DIR = Path("logos/_cache")
+_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+def _sanitize_for_docx(img_path: str | Path) -> Optional[str]:
+    """
+    Open the image with Pillow and re-save as a proper PNG copy in logos/_cache.
+    Returns path to sanitized PNG or None if it fails.
+    """
+    try:
+        p = Path(img_path)
+        if not p.exists() or not p.is_file():
+            return None
+        out = _CACHE_DIR / (p.stem + ".png")
+        with Image.open(p) as im:
+            if im.mode not in ("RGB", "RGBA"):
+                im = im.convert("RGBA" if "A" in im.getbands() else "RGB")
+            im.save(out, format="PNG", optimize=True)
+        return str(out)
+    except (UnidentifiedImageError, OSError, ValueError):
+        return None
+
+def sanitize_logo_for_docx(path_str: Optional[str]) -> Optional[str]:
+    if not path_str:
+        return None
+    return _sanitize_for_docx(path_str)
