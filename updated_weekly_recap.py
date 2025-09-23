@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-updated_weekly_recap.py — Gridiron Gazette builder wired to your template
+weekly_recap.py — Gridiron Gazette DOCX builder aligned to your template.
 
-- Maps directly to placeholders used in recap_template.docx:
+Fills these placeholders (as in your DOCX):
   title, WEEK_NUMBER, WEEKLY_INTRO,
   MATCHUP{1..10}_{HOME,AWAY,HS,AS,HOME_LOGO,AWAY_LOGO,BLURB,TOP_HOME,TOP_AWAY,BUST,KEYPLAY,DEF},
   LEAGUE_LOGO, SPONSOR_LOGO, SPONSOR_LINE
 
-- Logos: local-first via ./logos/team_logos/ and ./logos/special/
-- OUTDOCX may be a directory OR a filename with tokens:
-  {week}, {week02}, {year}, {league}
+Logos: local-first (TEAM_LOGOS_FILE or team_logos.json → ./logos/team_logos/*).
+Spotlight: never blank — uses team-level fallbacks when ESPN hides starters.
+Output: OUTDOCX may be a directory OR a filename with tokens {week},{week02},{year},{league}.
 """
 
 from __future__ import annotations
@@ -43,7 +43,68 @@ def _attach_special_logos(doc, ctx: Dict[str, Any]) -> None:
     league_name = ctx.get("LEAGUE_NAME") or ctx.get("LEAGUE_LOGO_NAME") or "Gridiron Gazette"
     ctx["LEAGUE_LOGO"]  = _inline(doc, logo_resolver.league_logo(league_name), 28.0)
     ctx["SPONSOR_LOGO"] = _inline(doc, logo_resolver.sponsor_logo("Gridiron Gazette"), 26.0)
-    ctx.setdefault("SPONSOR_LINE", "")  # keep header tidy even if empty
+    ctx.setdefault("SPONSOR_LINE", "")
+
+
+def _compute_top_bust_from_board(league: Any, week: int) -> List[Dict[str, str]]:
+    """Optional: compute TOP/BUST when ESPN exposes starters; otherwise empty list."""
+    out: List[Dict[str, str]] = []
+    try:
+        board = league.scoreboard(week) if league else []
+        def pts(p):  return getattr(p, "points", getattr(p, "total_points", 0)) or 0.0
+        def proj(p): return getattr(p, "projected_total_points", getattr(p, "projected_points", 0)) or 0.0
+        for m in board:
+            entry = {"TOP_HOME":"", "TOP_AWAY":"", "BUST":""}
+            for side in ("home_team","away_team"):
+                t = getattr(m, side, None)
+                starters = getattr(t, "starters", []) or []
+                if starters:
+                    top = max(starters, key=pts)
+                    bust = min(starters, key=lambda p: pts(p)-proj(p))
+                    def fmt(p): 
+                        P = pts(p); R = proj(p)
+                        return f"{getattr(p,'name','?')} ({P:.1f}" + (f" vs {R:.1f} proj)" if R else " pts)")
+                    if side=="home_team": entry["TOP_HOME"]=fmt(top)
+                    else: entry["TOP_AWAY"]=fmt(top)
+                    if not entry["BUST"]: entry["BUST"]=fmt(bust)
+            out.append(entry)
+    except Exception:
+        pass
+    return out
+
+
+def _fill_spotlight_fallbacks(games: List[Dict[str, Any]]) -> None:
+    """
+    Ensure Spotlight fields never blank by using team scores/names if player data missing.
+    """
+    for g in games:
+        home = g.get("HOME_TEAM_NAME") or "Home"
+        away = g.get("AWAY_TEAM_NAME") or "Away"
+        hs   = g.get("HOME_SCORE") or "0"
+        as_  = g.get("AWAY_SCORE") or "0"
+
+        g.setdefault("TOP_HOME",  f"{home}: {hs} pts (team)")
+        g.setdefault("TOP_AWAY",  f"{away}: {as_} pts (team)")
+
+        if not g.get("BUST"):
+            try:
+                hsf = float(hs); asf = float(as_)
+                loser_name, loser_pts = (home, hsf) if hsf <= asf else (away, asf)
+                g["BUST"] = f"{loser_name}: {loser_pts:.1f} pts (team)"
+            except Exception:
+                g["BUST"] = f"{home if str(hs) <= str(as_) else away}: {min(hs, as_)} pts (team)"
+
+        if not g.get("KEYPLAY") and not g.get("KEY_PLAY"):
+            recap = (g.get("RECAP") or g.get("BLURB") or "").strip()
+            g["KEYPLAY"] = recap.split(".")[0] + "." if recap else "Turning point: late momentum swing decided it."
+
+        if not g.get("DEF") and not g.get("DEF_NOTE"):
+            try:
+                hsf = float(hs); asf = float(as_)
+                winner, loser, lpts = (home, away, asf) if hsf >= asf else (away, home, hsf)
+                g["DEF"] = f"{winner} defense forced key stops, holding {loser} to {lpts:.1f}."
+            except Exception:
+                g["DEF"] = "Defense held firm in the clutch."
 
 
 def _map_front_page_slots(ctx: Dict[str, Any]) -> None:
@@ -65,71 +126,6 @@ def _map_front_page_slots(ctx: Dict[str, Any]) -> None:
         ctx[f"MATCHUP{n}_DEF"]       = _safe(g.get("DEF") or g.get("DEF_NOTE"))
 
 
-def _fill_spotlight_fallbacks(games):
-    """
-    Ensure Stats Spotlight fields (TOP_HOME, TOP_AWAY, BUST, KEYPLAY, DEF) are never blank.
-    Uses team scores/names when starters are unavailable.
-    """
-    for g in games:
-        home = g.get("HOME_TEAM_NAME") or "Home"
-        away = g.get("AWAY_TEAM_NAME") or "Away"
-        hs   = g.get("HOME_SCORE") or "0"
-        as_  = g.get("AWAY_SCORE") or "0"
-
-        # existing values (from players) win; otherwise set simple team-based fallbacks
-        g.setdefault("TOP_HOME",  f"{home}: {hs} pts (team)")
-        g.setdefault("TOP_AWAY",  f"{away}: {as_} pts (team)")
-
-        # Biggest Bust: the lower-scoring side (team-level proxy)
-        if not g.get("BUST"):
-            try:
-                hsf = float(hs); asf = float(as_)
-                loser_name, loser_pts = (home, hsf) if hsf <= asf else (away, asf)
-                g["BUST"] = f"{loser_name}: {loser_pts:.1f} pts (team)"
-            except Exception:
-                g["BUST"] = f"{home if str(hs) <= str(as_) else away}: {min(hs, as_)} pts (team)"
-
-        # Key Play: if your recap/BLURB exists, reference it; else generic turning-point
-        if not g.get("KEYPLAY") and not g.get("KEY_PLAY"):
-            recap = (g.get("RECAP") or g.get("BLURB") or "").strip()
-            g["KEYPLAY"] = recap.split(".")[0] + "." if recap else "Turning point: late momentum swing decided it."
-
-        # Defense Note: generic, tied to winner/loser
-        if not g.get("DEF") and not g.get("DEF_NOTE"):
-            try:
-                hsf = float(hs); asf = float(as_)
-                winner, loser, lpts = (home, away, asf) if hsf >= asf else (away, home, hsf)
-                g["DEF"] = f"{winner} defense forced key stops, holding {loser} to {lpts:.1f}."
-            except Exception:
-                g["DEF"] = "Defense held firm in the clutch."
-
-def _compute_top_bust_from_board(league: Any, week: int) -> List[Dict[str, str]]:
-    """Optional: fill TOP/BUST when starters are available; otherwise silently skip."""
-    out: List[Dict[str, str]] = []
-    try:
-        if not league:
-            return out
-        board = league.scoreboard(week)
-        def pts(p):  return getattr(p, "points", getattr(p, "total_points", 0)) or 0.0
-        def proj(p): return getattr(p, "projected_total_points", getattr(p, "projected_points", 0)) or 0.0
-        for m in board:
-            entry = {"TOP_HOME":"", "TOP_AWAY":"", "BUST":""}
-            for side in ("home_team","away_team"):
-                t = getattr(m, side, None)
-                starters = getattr(t, "starters", []) or []
-                if starters:
-                    top = max(starters, key=pts)
-                    bust = min(starters, key=lambda p: pts(p)-proj(p))
-                    def fmt(p): return f"{getattr(p,'name','?')} ({pts(p):.1f}" + (f" vs {proj(p):.1f} proj" if proj(p) else " pts") + ")"
-                    if side=="home_team": entry["TOP_HOME"]=fmt(top)
-                    else: entry["TOP_AWAY"]=fmt(top)
-                    if not entry["BUST"]: entry["BUST"]=fmt(bust)
-            out.append(entry)
-    except Exception:
-        pass
-    return out
-
-
 def build_weekly_recap(
     league: Any,
     league_id: int,
@@ -141,18 +137,17 @@ def build_weekly_recap(
     blurb_style: str = "sabre",
     blurb_words: int = 200,
 ) -> str:
-    """Main entry point called by build_gazette.py"""
     doc = DocxTemplate(template or "recap_template.docx")
 
-    # Base context (scores + shell); doesn’t depend on starters
+    # Base context: names + scores (does not depend on starters)
     ctx = gazette_data.assemble_context(str(league_id), year, week, llm_blurbs=False, blurb_style=blurb_style)
     games = ctx.get("GAMES", [])
 
-    # Ensure header/title placeholders are provided
+    # Title/header fields expected by your template
     ctx.setdefault("WEEK_NUMBER", week)
     ctx.setdefault("title", f"Week {week} Fantasy Football Gazette — {ctx.get('LEAGUE_NAME','League')}")
 
-    # Blurbs: league if available; else games-only fallback inside storymaker
+    # Optional blurbs
     if llm_blurbs and games:
         try:
             blurbs = storymaker.generate_blurbs(league, year, week, style=blurb_style, max_words=blurb_words, games=games)
@@ -162,26 +157,28 @@ def build_weekly_recap(
         except Exception as e:
             print(f"[blurbs] fallback: {e}")
 
-    # Optional player-derived tidbits (if starters are visible)
-    derived = _compute_top_bust_from_board(league, week)
-    for i, g in enumerate(games):
-        if i < len(derived):
-            g.setdefault("TOP_HOME", derived[i].get("TOP_HOME",""))
-            g.setdefault("TOP_AWAY", derived[i].get("TOP_AWAY",""))
-            g.setdefault("BUST",     derived[i].get("BUST",""))
+    # Optional starters-derived tidbits (OK if empty)
+    try:
+        derived = _compute_top_bust_from_board(league, week)
+        for i, g in enumerate(games):
+            if i < len(derived):
+                g.setdefault("TOP_HOME", derived[i].get("TOP_HOME",""))
+                g.setdefault("TOP_AWAY", derived[i].get("TOP_AWAY",""))
+                g.setdefault("BUST",     derived[i].get("BUST",""))
+    except Exception:
+        pass
 
-    # Logos (local-first), mapping to InlineImage fields
+    # Logos & Spotlight fallbacks (never blank)
     _attach_team_logos(doc, games)
     ctx["GAMES"] = games
+    _fill_spotlight_fallbacks(games)
+
     _attach_special_logos(doc, ctx)
     _map_front_page_slots(ctx)
 
-    doc.render(ctx)  # preliminary render to measure text
-
-    # Output naming — supports tokens in OUTDOCX
+    # Output naming with tokens
     league_name = (ctx.get("LEAGUE_NAME") or ctx.get("LEAGUE_LOGO_NAME") or "League").strip()
     tokens = {"week": str(week), "week02": f"{week:02d}", "year": str(year), "league": league_name}
-
     def fill_tokens(s: str) -> str:
         for k, v in tokens.items():
             s = s.replace("{"+k+"}", v)
