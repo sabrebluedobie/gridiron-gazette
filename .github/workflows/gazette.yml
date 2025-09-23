@@ -12,20 +12,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # -------- Job-level environment --------
-    env:
-      ESPN_S2: ${{ secrets.ESPN_S2 }}
-      SWID: ${{ secrets.SWID }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-
-      # Variables (names must match your repo variables)
-      LEAGUE_ID: ${{ vars.LEAGUE_ID }}
-      YEAR: ${{ vars.YEAR }}
-      TEMPLATE: ${{ vars.TEMPLATE }}
-      OUTDOCX: ${{ vars.OUTDOCX }}
-      FANTASY_SEASON_START: ${{ vars.FANTASY_SEASON_START }}
-
-    # -------- Steps --------
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,6 +29,20 @@ jobs:
             pip install -r requirements.txt
           fi
           pip install espn-api docxtpl python-docx python-dotenv pyyaml openai requests
+
+      # Export all secrets/vars to the job environment (no linter warnings)
+      - name: Export repo Secrets & Variables to $GITHUB_ENV
+        run: |
+          {
+            echo "ESPN_S2=${{ secrets.ESPN_S2 }}"
+            echo "SWID=${{ secrets.SWID }}"
+            echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}"
+            echo "LEAGUE_ID=${{ vars.LEAGUE_ID }}"
+            echo "YEAR=${{ vars.YEAR }}"
+            echo "TEMPLATE=${{ vars.TEMPLATE }}"
+            echo "OUTDOCX=${{ vars.OUTDOCX }}"
+            echo "FANTASY_SEASON_START=${{ vars.FANTASY_SEASON_START }}"
+          } >> "$GITHUB_ENV"
 
       - name: Preflight (sanity print, no secrets)
         run: |
@@ -68,24 +68,21 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Safe defaults in shell (avoids linter warnings in YAML)
+          # Safe defaults in shell
           : "${TEMPLATE:=recap_template.docx}"
           : "${OUTDOCX:=recaps}"
           : "${YEAR:=2025}"
 
-          # Optional workflow input to override week
           PY_ARGS=()
           if [ -n "${{ github.event.inputs.week }}" ]; then
             PY_ARGS+=(--week "${{ github.event.inputs.week }}")
           fi
 
-          # Fail clearly if LEAGUE_ID is missing
           if [ -z "${LEAGUE_ID:-}" ]; then
             echo "❌ LEAGUE_ID is not set (Settings → Actions → Variables)."
             exit 1
           fi
 
-          # Generate with blurbs + verbose logs
           python build_gazette.py --llm-blurbs --verbose "${PY_ARGS[@]}"
 
       - name: Upload Gazette artifact
