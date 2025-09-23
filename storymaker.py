@@ -1,107 +1,93 @@
 from __future__ import annotations
 import os
-from typing import List, Dict, Any
+from typing import Any, Dict
 
-_OPENAI_NEW = False
-try:
-    from openai import OpenAI
-    _OPENAI_NEW = True
-except Exception:
-    pass
+SABRE_SIGNATURE = "— Sabre, Gridiron Gazette"
 
-if not _OPENAI_NEW:
-    try:
-        import openai  # type: ignore
-    except Exception:
-        openai = None
+SABRE_STORY_PROMPT = """You are Sabre, the Doberman reporter of the Gridiron Gazette.
+Voice: witty, a little savage, but fair. Keep it concise and specific.
+Write short spotlights per matchup using the provided stats. No profanity.
 
-def _load_sabre_prompt(week: int) -> str:
-    p = os.getenv("GAZETTE_SABRE_PROMPT")
-    if p: return p.strip()
-    return (
-        f"You are Sabre, the Gridiron Gazette’s Doberman mascot and beat reporter. "
-        f"Voice: witty, clean, first-person as Sabre. "
-        f"Do not invent stats. Focus on the info provided. "
-        f"Call out the decisive swing, top effort, and any letdown. "
-        f"End with ‘Sabre out—see you in Week {week}.’"
-    )
+Return five lines per matchup:
+1) Top Scorer (Home)
+2) Top Scorer (Away)
+3) Biggest Bust
+4) Key Play
+5) Defense Note
+"""
 
-def _player_line(p: Any) -> str:
-    pts = getattr(p,"points", getattr(p,"total_points",0)) or 0
-    proj = getattr(p,"projected_total_points", getattr(p,"projected_points",0)) or 0
-    name = getattr(p,"name","Unknown")
-    return f"{name} ({pts:.1f} vs {proj:.1f} proj)" if proj else f"{name} ({pts:.1f} pts)"
+def _has_openai() -> bool:
+    return bool(os.getenv("OPENAI_API_KEY"))
 
-def _from_league_matchup(m: Any, year: int, week: int, max_words: int) -> str:
-    h, a = getattr(m,"home_team",None), getattr(m,"away_team",None)
-    hs, as_ = getattr(m,"home_score",0), getattr(m,"away_score",0)
-    lines = [f"Season {year}, Week {week}. {getattr(h,'team_name','Home')} ({hs}) vs {getattr(a,'team_name','Away')} ({as_})."]
-    for t, label in ((h,"Home"),(a,"Away")):
-        st = getattr(t,"starters",[]) or []
-        if st:
-            top = max(st, key=lambda p: getattr(p,"points", getattr(p,"total_points",0)) or 0)
-            lines.append(f"{label} top: {_player_line(top)}.")
-    lines.append(f"Write ~{max_words} words.")
-    return "\n".join(lines)
-
-def _from_games_entry(g: Dict[str, Any], year: int, week: int, max_words: int) -> str:
-    h, a = g.get("HOME_TEAM_NAME","Home"), g.get("AWAY_TEAM_NAME","Away")
-    hs, as_ = g.get("HOME_SCORE","0"), g.get("AWAY_SCORE","0")
-    return (f"Season {year}, Week {week}. {h} ({hs}) vs {a} ({as_}). "
-            f"Use only this info. Write ~{max_words} words.")
-
-def _call_openai(messages: List[Dict[str,str]]) -> str:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY missing")
-    model = os.getenv("GAZETTE_LLM_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
-    if _OPENAI_NEW:
-        resp = OpenAI(api_key=api_key).chat.completions.create(model=model, messages=messages, temperature=0.6)
-        return (resp.choices[0].message.content or "").strip()
-    if 'openai' in globals() and openai:
-        openai.api_key = api_key
-        resp = openai.ChatCompletion.create(model=model, messages=messages, temperature=0.6)
-        return (resp["choices"][0]["message"]["content"] or "").strip()
-    raise RuntimeError("OpenAI SDK not installed")
-
-def generate_blurbs(
-    league: Any,
-    year: int,
-    week: int,
-    style: str = "sabre",
-    max_words: int = 200,
-    games: List[Dict[str,Any]] | None = None,   # NEW: use team scores if league not available
-) -> List[str]:
-    sys_prompt = _load_sabre_prompt(week) if style.lower()=="sabre" else "You write concise, factual fantasy recaps."
-    out: List[str] = []
-    used_fallback = False
-
-    # Try league-based context first (with players)
-    try:
-        if league:
-            board = league.scoreboard(week)
-            for m in board:
-                messages = [{"role":"system","content":sys_prompt},
-                            {"role":"user","content":_from_league_matchup(m, year, week, max_words)}]
-                out.append(_call_openai(messages))
-            return out
-    except Exception:
-        used_fallback = True
-
-    # Fallback: use team scores from games (no player details)
-    if games:
-        for g in games:
-            messages = [{"role":"system","content":sys_prompt},
-                        {"role":"user","content":_from_games_entry(g, year, week, max_words)}]
-            try:
-                out.append(_call_openai(messages))
-            except Exception:
-                h, a = g.get("HOME_TEAM_NAME","Home"), g.get("AWAY_TEAM_NAME","Away")
-                hs, as_ = g.get("HOME_SCORE","0"), g.get("AWAY_SCORE","0")
-                out.append(f"Week {week}: {h} {hs} vs {a} {as_}. Sabre out—see you in Week {week}.")
+def generate_spotlights_for_week(ctx: Dict[str, Any], style: str = "sabre", words: int = 200) -> Dict[str, Dict[str, str]]:
+    """
+    Returns dict like {"1": {"home": "...", "away": "...", "bust": "...", "key": "...", "def": "..."}, ...}
+    If OpenAI is unavailable, we synthesize tight stat-based lines so the template never shows blanks.
+    """
+    # If no key, synthesize from stats (keeps pipeline robust)
+    if not _has_openai():
+        out: Dict[str, Dict[str, str]] = {}
+        for i in range(1, 8):
+            h = ctx.get(f"MATCHUP{i}_HOME")
+            a = ctx.get(f"MATCHUP{i}_AWAY")
+            if not (h and a):
+                continue
+            hs = ctx.get(f"MATCHUP{i}_HS", "")
+            as_ = ctx.get(f"MATCHUP{i}_AS", "")
+            hts = ctx.get(f"MATCHUP{i}_HOME_TOP_SCORER", "")
+            htp = ctx.get(f"MATCHUP{i}_HOME_TOP_POINTS", "")
+            ats = ctx.get(f"MATCHUP{i}_AWAY_TOP_SCORER", "")
+            atp = ctx.get(f"MATCHUP{i}_AWAY_TOP_POINTS", "")
+            out[str(i)] = {
+                "home": f"Top Scorer (Home): {hts} ({htp})" if hts else "Top Scorer (Home): —",
+                "away": f"Top Scorer (Away): {ats} ({atp})" if ats else "Top Scorer (Away): —",
+                "bust": "Biggest Bust: —",
+                "key": f"Key Play: {h} {hs} vs {a} {as_}",
+                "def": "Defense Note: —",
+            }
         return out
 
-    # Last resort
-    if used_fallback:
-        return [f"Week {week} wrapped. Sabre out—see you in Week {week}."] * 6
-    return out
+    # With OpenAI: generate per-matchup spotlights
+    try:
+        from openai import OpenAI
+        client = OpenAI()
+        league = ctx.get("LEAGUE_NAME", "League")
+        week = ctx.get("WEEK_NUMBER", "")
+
+        blocks: Dict[str, Dict[str, str]] = {}
+        for i in range(1, 8):
+            h = ctx.get(f"MATCHUP{i}_HOME"); a = ctx.get(f"MATCHUP{i}_AWAY")
+            if not (h and a): continue
+            payload = {
+                "league": league, "week": week,
+                "home": h, "away": a,
+                "hs": ctx.get(f"MATCHUP{i}_HS", ""), "as": ctx.get(f"MATCHUP{i}_AS", ""),
+                "home_top": ctx.get(f"MATCHUP{i}_HOME_TOP_SCORER",""),
+                "home_pts": ctx.get(f"MATCHUP{i}_HOME_TOP_POINTS",""),
+                "away_top": ctx.get(f"MATCHUP{i}_AWAY_TOP_SCORER",""),
+                "away_pts": ctx.get(f"MATCHUP{i}_AWAY_TOP_POINTS",""),
+            }
+            content = f"{SABRE_STORY_PROMPT}\n\nLeague: {league} Week {week}\nData: {payload}\nWrite ~{max(120, words)} words total."
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                temperature=0.5,
+                messages=[{"role":"system","content":"You are Sabre."},
+                          {"role":"user","content":content}]
+            )
+            text = resp.choices[0].message.content.strip()
+            # simple line-splitter (5 lines expected; be defensive)
+            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+            def pick(idx: int, default: str) -> str:
+                try: return lines[idx]
+                except Exception: return default
+            blocks[str(i)] = {
+                "home": pick(0, "Top Scorer (Home): —"),
+                "away": pick(1, "Top Scorer (Away): —"),
+                "bust": pick(2, "Biggest Bust: —"),
+                "key":  pick(3, "Key Play: —"),
+                "def":  pick(4, "Defense Note: —"),
+            }
+        return blocks
+    except Exception:
+        # Final safety: fallback to stats
+        return generate_spotlights_for_week(ctx, style, words=words)  # type: ignore
