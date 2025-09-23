@@ -19,84 +19,7 @@ except Exception as e:
     log.warning(f"Failed to import storymaker: {e}")
     def generate_spotlights_for_week(ctx: Dict[str, Any], style: str, words: int) -> Dict[str, Dict[str, str]]:
         # Fallback: produce simple stat-based spotlights so the section is never blank
-        log.info("Attaching images...")
-        _attach_images(context, doc)
-        
-        # Ensure output directory exists
-        Path(outdocx).parent.mkdir(parents=True, exist_ok=True)
-        
-        log.info("Rendering document...")
-        doc.render(context)
-        
-        log.info("Saving document...")
-        doc.save(outdocx)
-        
-        log.info(f"Document rendered successfully: {outdocx}")
-        return outdocx
-        
-    except Exception as e:
-        log.error(f"Failed to render DOCX: {e}")
-        raise
-
-
-def build_weekly_recap(
-    league: Any,
-    league_id: int,
-    year: int,
-    week: int,
-    template: str,
-    output_dir: str,
-    llm_blurbs: bool = True,
-    blurb_style: str = "sabre",
-    blurb_words: int = 200,
-) -> str:
-    """Build complete weekly recap with robust error handling"""
-    log.info(f"Building weekly recap - League: {league_id}, Year: {year}, Week: {week}")
-    log.info(f"Template: {template}")
-    log.info(f"LLM Blurbs: {llm_blurbs}, Style: {blurb_style}, Words: {blurb_words}")
-    
-    try:
-        # Build context from ESPN data
-        ctx = build_context(league_id=league_id, year=year, week=week)
-        
-        # Add blurb configuration
-        ctx.setdefault("BLURB_STYLE", blurb_style or "sabre")
-        ctx.setdefault("BLURB_WORDS", blurb_words or 200)
-        ctx.setdefault("LLM_BLURBS", llm_blurbs)
-
-        # Process output path with token replacement
-        week_num = int(ctx.get("WEEK_NUMBER", week or 0) or 0)
-        league_name = ctx.get("LEAGUE_NAME", "League")
-        
-        out_path = output_dir
-        out_path = out_path.replace("{year}", str(ctx.get("YEAR", year)))
-        out_path = out_path.replace("{league}", str(league_name))
-        out_path = out_path.replace("{week}", str(week_num))
-        out_path = out_path.replace("{week02}", f"{week_num:02d}")
-        
-        # Ensure .docx extension
-        if not out_path.lower().endswith(".docx"):
-            out_path = str(Path(out_path) / f"gazette_week_{week_num}.docx")
-
-        log.info(f"Final output path: {out_path}")
-        
-        # Log context summary
-        log.info(f"Context summary:")
-        log.info(f"  League: {ctx.get('LEAGUE_NAME')}")
-        log.info(f"  Week: {ctx.get('WEEK_NUMBER')}")
-        log.info(f"  Matchups: {ctx.get('MATCHUP_COUNT', 0)}")
-        log.info(f"  Awards: Cupcake={bool(ctx.get('AWARD_CUPCAKE_TEAM'))}, "
-                f"Kitty={bool(ctx.get('AWARD_KITTY_WINNER'))}, "
-                f"TopScore={bool(ctx.get('AWARD_TOPSCORE_TEAM'))}")
-        
-        # Render the document
-        result = render_docx(template, out_path, ctx)
-        log.info(f"Weekly recap completed successfully: {result}")
-        return result
-        
-    except Exception as e:
-        log.error(f"Failed to build weekly recap: {e}")
-        raiseUsing fallback spotlight generator")
+        log.info("Using fallback spotlight generator")
         out: Dict[str, Dict[str, str]] = {}
         for i in range(1, 8):
             h = ctx.get(f"MATCHUP{i}_HOME")
@@ -346,4 +269,81 @@ def render_docx(template_path: str, outdocx: str, context: Dict[str, Any]) -> st
             words=int(context.get("BLURB_WORDS", 200))
         )
         
-        log.info("
+        log.info("Attaching images...")
+        _attach_images(context, doc)
+        
+        # Ensure output directory exists
+        Path(outdocx).parent.mkdir(parents=True, exist_ok=True)
+        
+        log.info("Rendering document...")
+        doc.render(context)
+        
+        log.info("Saving document...")
+        doc.save(outdocx)
+        
+        log.info(f"Document rendered successfully: {outdocx}")
+        return outdocx
+        
+    except Exception as e:
+        log.error(f"Failed to render DOCX: {e}")
+        raise
+
+
+def build_weekly_recap(
+    league: Any,
+    league_id: int,
+    year: int,
+    week: int,
+    template: str,
+    output_dir: str,
+    llm_blurbs: bool = True,
+    blurb_style: str = "sabre",
+    blurb_words: int = 200,
+) -> str:
+    """Build complete weekly recap with robust error handling"""
+    log.info(f"Building weekly recap - League: {league_id}, Year: {year}, Week: {week}")
+    log.info(f"Template: {template}")
+    log.info(f"LLM Blurbs: {llm_blurbs}, Style: {blurb_style}, Words: {blurb_words}")
+    
+    try:
+        # Build context from ESPN data
+        ctx = build_context(league_id=league_id, year=year, week=week)
+        
+        # Add blurb configuration
+        ctx.setdefault("BLURB_STYLE", blurb_style or "sabre")
+        ctx.setdefault("BLURB_WORDS", blurb_words or 200)
+        ctx.setdefault("LLM_BLURBS", llm_blurbs)
+
+        # Process output path with token replacement
+        week_num = int(ctx.get("WEEK_NUMBER", week or 0) or 0)
+        league_name = ctx.get("LEAGUE_NAME", "League")
+        
+        out_path = output_dir
+        out_path = out_path.replace("{year}", str(ctx.get("YEAR", year)))
+        out_path = out_path.replace("{league}", str(league_name))
+        out_path = out_path.replace("{week}", str(week_num))
+        out_path = out_path.replace("{week02}", f"{week_num:02d}")
+        
+        # Ensure .docx extension
+        if not out_path.lower().endswith(".docx"):
+            out_path = str(Path(out_path) / f"gazette_week_{week_num}.docx")
+
+        log.info(f"Final output path: {out_path}")
+        
+        # Log context summary
+        log.info(f"Context summary:")
+        log.info(f"  League: {ctx.get('LEAGUE_NAME')}")
+        log.info(f"  Week: {ctx.get('WEEK_NUMBER')}")
+        log.info(f"  Matchups: {ctx.get('MATCHUP_COUNT', 0)}")
+        log.info(f"  Awards: Cupcake={bool(ctx.get('AWARD_CUPCAKE_TEAM'))}, "
+                f"Kitty={bool(ctx.get('AWARD_KITTY_WINNER'))}, "
+                f"TopScore={bool(ctx.get('AWARD_TOPSCORE_TEAM'))}")
+        
+        # Render the document
+        result = render_docx(template, out_path, ctx)
+        log.info(f"Weekly recap completed successfully: {result}")
+        return result
+        
+    except Exception as e:
+        log.error(f"Failed to build weekly recap: {e}")
+        raise
