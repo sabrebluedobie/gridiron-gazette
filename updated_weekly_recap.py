@@ -5,12 +5,13 @@ from typing import Any, Dict, List, Optional
 import time
 import logging
 import json
+import re
 
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 
 import gazette_data
-import enhanced_logo_resolver as logo_resolver
+import logo_resolver
 import storymaker
 
 # Set up logging
@@ -23,6 +24,44 @@ def _safe(s):
 def _inline(doc, path: Optional[str], w_mm: float) -> Optional[InlineImage]:
     p = Path(path) if path else None
     return InlineImage(doc, str(p), width=Mm(w_mm)) if (p and p.exists()) else None
+
+def safe_get_score_enhanced(team, week, team_name="Unknown"):
+    """Enhanced score extraction that works with ESPN API quirks"""
+    try:
+        logger.debug(f"Getting score for {team_name}")
+        
+        # Method 1: scores dictionary with week key
+        if hasattr(team, 'scores') and isinstance(team.scores, dict):
+            if week in team.scores:
+                score = team.scores[week]
+                if score is not None:
+                    logger.info(f"✅ Found score via scores[{week}] for {team_name}: {score}")
+                    return f"{float(score):.1f}"
+            
+            # Try latest week if specific week not found
+            if team.scores:
+                latest_week = max(team.scores.keys())
+                score = team.scores[latest_week]
+                if score is not None:
+                    logger.info(f"✅ Using latest week {latest_week} score for {team_name}: {score}")
+                    return f"{float(score):.1f}"
+        
+        # Method 2: points attribute
+        if hasattr(team, 'points') and team.points is not None:
+            logger.info(f"✅ Found score via points for {team_name}: {team.points}")
+            return f"{float(team.points):.1f}"
+        
+        # Method 3: total_points
+        if hasattr(team, 'total_points') and team.total_points is not None:
+            logger.info(f"✅ Found score via total_points for {team_name}: {team.total_points}")
+            return f"{float(team.total_points):.1f}"
+        
+        logger.warning(f"❌ No score found for {team_name}")
+        return ""
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting score for {team_name}: {e}")
+        return ""
 
 def load_team_mapping():
     """Load team_logos.json as authoritative source"""
@@ -296,7 +335,7 @@ def get_player_name(player):
         return "Unknown Player"
 
 def _compute_top_bust_from_board(league: Any, week: int) -> List[Dict[str, str]]:
-    """FIXED - Enhanced player stats extraction with comprehensive logging"""
+    """FIXED VERSION - Enhanced player stats extraction with proper return"""
     out = []
     
     try:
@@ -323,6 +362,7 @@ def _compute_top_bust_from_board(league: Any, week: int) -> List[Dict[str, str]]
             return []
         
         for i, matchup in enumerate(board):
+            # CRITICAL: Initialize entry for EVERY matchup
             entry = {"TOP_HOME": "", "TOP_AWAY": "", "BUST": ""}
             
             try:
@@ -331,7 +371,7 @@ def _compute_top_bust_from_board(league: Any, week: int) -> List[Dict[str, str]]
                 
                 if not home_team or not away_team:
                     logger.warning(f"⚠️ Matchup {i}: Missing team data")
-                    out.append(entry)
+                    out.append(entry)  # Still append empty entry
                     continue
                 
                 home_name = getattr(home_team, 'team_name', f'Home{i}')
@@ -397,11 +437,15 @@ def _compute_top_bust_from_board(league: Any, week: int) -> List[Dict[str, str]]
                 else:
                     logger.info(f"No bust found for matchup {i} (no meaningful projections)")
                 
+                # CRITICAL: Log what we're actually returning
+                logger.info(f"🔥 ENTRY FOR MATCHUP {i}: {entry}")
+                
             except Exception as e:
                 logger.error(f"❌ Error processing matchup {i}: {e}")
                 import traceback
                 logger.debug(f"Matchup {i} traceback: {traceback.format_exc()}")
             
+            # CRITICAL: Always append the entry (even if empty)
             out.append(entry)
     
     except Exception as e:
@@ -409,11 +453,11 @@ def _compute_top_bust_from_board(league: Any, week: int) -> List[Dict[str, str]]
         import traceback
         logger.error(f"Fatal traceback: {traceback.format_exc()}")
     
-    logger.info(f"✅ Computed stats for {len(out)} matchups")
+    logger.info(f"✅ RETURNING stats for {len(out)} matchups: {out}")
     return out
 
-def calculate_weekly_awards_fixed(games):
-    """Fixed weekly awards calculation"""
+def calculate_weekly_awards_enhanced(games):
+    """Enhanced awards calculation that extracts scores from LLM text when API fails"""
     awards = {
         "top_score": {"team": "", "points": ""},
         "low_score": {"team": "", "points": ""},
@@ -423,6 +467,7 @@ def calculate_weekly_awards_fixed(games):
     try:
         scores = []
         
+        # First try to extract scores from game data (if available)
         for game in games:
             home_team = game.get("HOME_TEAM_NAME", "")
             away_team = game.get("AWAY_TEAM_NAME", "")
@@ -437,23 +482,78 @@ def calculate_weekly_awards_fixed(games):
             except (ValueError, TypeError):
                 continue
         
+        # If no scores from game data, extract from LLM blurbs (they contain the scores!)
+        if not scores:
+            logger.info("📊 Extracting scores from LLM blurbs...")
+            for game in games:
+                recap = game.get("RECAP", "")
+                home_team = game.get("HOME_TEAM_NAME", "")
+                away_team = game.get("AWAY_TEAM_NAME", "")
+                
+                # Look for various score patterns in the recap text
+                score_patterns = [
+                    r'(\d+\.?\d*)\s+to\s+(\d+\.?\d*)',  # "95.62 to 95.64"
+                    r'(\d+\.?\d*),?\s+while\s+.*?(\d+\.?\d*)',  # "132.82, while Annie 99.14"
+                    r'final score[^0-9]*?(\d+\.?\d*)[^0-9]+(\d+\.?\d*)',  # "final score of 99.78 to 82.1"
+                    r'(\d+\.?\d*)[^0-9]+vs[^0-9]+(\d+\.?\d*)',  # "132.52 vs 120.16"
+                ]
+                
+                for pattern in score_patterns:
+                    match = re.search(pattern, recap, re.IGNORECASE)
+                    if match:
+                        try:
+                            score1, score2 = float(match.group(1)), float(match.group(2))
+                            
+                            # Try to determine which team gets which score by looking at context
+                            if home_team.lower() in recap.lower()[:match.start()]:
+                                # Home team mentioned before scores, likely home team gets first score
+                                if home_team: scores.append((home_team, score1))
+                                if away_team: scores.append((away_team, score2))
+                            else:
+                                # Away team mentioned first, or use higher score for winner
+                                if score1 >= score2:
+                                    # First score is higher, likely the winner mentioned first
+                                    if "won" in recap.lower() or "beat" in recap.lower() or "defeated" in recap.lower():
+                                        winner = home_team if any(word in recap.lower() for word in [home_team.lower()[:5]]) else away_team
+                                        if winner == home_team:
+                                            scores.append((home_team, score1))
+                                            scores.append((away_team, score2))
+                                        else:
+                                            scores.append((away_team, score1))
+                                            scores.append((home_team, score2))
+                                    else:
+                                        # Default assignment
+                                        if home_team: scores.append((home_team, score1))
+                                        if away_team: scores.append((away_team, score2))
+                                else:
+                                    if home_team: scores.append((home_team, score2))
+                                    if away_team: scores.append((away_team, score1))
+                            
+                            logger.info(f"📊 Extracted scores from '{recap[:50]}...': {home_team}={scores[-2][1] if len(scores)>=2 else 'N/A'}, {away_team}={scores[-1][1] if scores else 'N/A'}")
+                            break  # Found scores for this game, move to next
+                        except (ValueError, IndexError) as e:
+                            logger.debug(f"Error parsing scores from pattern: {e}")
+                            continue
+        
         if scores:
-            # Top score
+            # Calculate awards
             top_team, top_points = max(scores, key=lambda x: x[1])
             awards["top_score"] = {"team": top_team, "points": f"{top_points:.1f}"}
             
-            # Low score  
             low_team, low_points = min(scores, key=lambda x: x[1])
             awards["low_score"] = {"team": low_team, "points": f"{low_points:.1f}"}
             
-            # Largest gap
             gap = top_points - low_points
             awards["largest_gap"] = {"desc": f"{top_team} vs {low_team}", "gap": f"{gap:.1f}"}
             
-            logger.info(f"Awards calculated: Top={top_team}({top_points:.1f}), Low={low_team}({low_points:.1f})")
+            logger.info(f"🏆 Awards calculated: Top={top_team}({top_points:.1f}), Low={low_team}({low_points:.1f}), Gap={gap:.1f}")
+        else:
+            logger.warning("❌ No scores found for awards calculation")
     
     except Exception as e:
-        logger.error(f"Error calculating weekly awards: {e}")
+        logger.error(f"Error calculating enhanced awards: {e}")
+        import traceback
+        logger.error(f"Awards traceback: {traceback.format_exc()}")
     
     return awards
 
@@ -468,7 +568,7 @@ def build_weekly_recap(
     blurb_style: str = "sabre",
     blurb_words: int = 200,
 ) -> str:
-    """Enhanced build function with comprehensive stats fixing"""
+    """Enhanced build function with comprehensive stats and awards fixing"""
     
     logger.info(f"🏈 Building weekly recap for League {league_id}, Year {year}, Week {week}")
     
@@ -524,17 +624,27 @@ def build_weekly_recap(
     try:
         derived = _compute_top_bust_from_board(league, week)
         
+        # CRITICAL FIX: Force assignment instead of setdefault
         for i, g in enumerate(games):
             if i < len(derived):
-                g.setdefault("TOP_HOME", derived[i].get("TOP_HOME", ""))
-                g.setdefault("TOP_AWAY", derived[i].get("TOP_AWAY", ""))
-                g.setdefault("BUST", derived[i].get("BUST", ""))
+                # FORCE assignment (don't use setdefault)
+                g["TOP_HOME"] = derived[i].get("TOP_HOME", "")
+                g["TOP_AWAY"] = derived[i].get("TOP_AWAY", "")
+                g["BUST"] = derived[i].get("BUST", "")
+                
+                # Log what we're assigning
+                logger.info(f"🔥 ASSIGNED to game {i}: TOP_HOME='{g['TOP_HOME']}', TOP_AWAY='{g['TOP_AWAY']}', BUST='{g['BUST']}'")
+            else:
+                # Ensure empty values for games without derived stats
+                g["TOP_HOME"] = ""
+                g["TOP_AWAY"] = ""
+                g["BUST"] = ""
         
         logger.info(f"✅ Enhanced {len(derived)} games with player stats")
         
-        # Log what we actually got
+        # Log verification
         for i, g in enumerate(games[:3]):  # Just log first 3
-            logger.info(f"Game {i} stats: TOP_HOME='{g.get('TOP_HOME', '')}', TOP_AWAY='{g.get('TOP_AWAY', '')}', BUST='{g.get('BUST', '')}'")
+            logger.info(f"VERIFICATION Game {i}: TOP_HOME='{g.get('TOP_HOME', 'MISSING')}', TOP_AWAY='{g.get('TOP_AWAY', 'MISSING')}', BUST='{g.get('BUST', 'MISSING')}'")
         
     except Exception as e:
         logger.error(f"❌ Failed to compute player stats: {e}")
@@ -543,14 +653,14 @@ def build_weekly_recap(
         
         # Add empty stats to maintain template compatibility
         for g in games:
-            g.setdefault("TOP_HOME", "")
-            g.setdefault("TOP_AWAY", "")
-            g.setdefault("BUST", "")
+            g["TOP_HOME"] = ""
+            g["TOP_AWAY"] = ""
+            g["BUST"] = ""
 
     # ===== CRITICAL AWARDS COMPUTATION =====
     logger.info("🏆 Computing weekly awards (Top Score, Cupcake, Kitty)...")
     try:
-        awards = calculate_weekly_awards_fixed(games)
+        awards = calculate_weekly_awards_enhanced(games)
         
         # Update context with awards
         ctx["awards"] = awards
@@ -628,6 +738,8 @@ def build_weekly_recap(
         logger.info(f"  Games count: {len(ctx.get('GAMES', []))}")
         logger.info(f"  MATCHUP1_HOME: {ctx.get('MATCHUP1_HOME', 'N/A')}")
         logger.info(f"  MATCHUP1_TOP_HOME: {ctx.get('MATCHUP1_TOP_HOME', 'N/A')}")
+        logger.info(f"  AWARD_TOP_TEAM: {ctx.get('AWARD_TOP_TEAM', 'N/A')}")
+        logger.info(f"  AWARD_CUPCAKE_TEAM: {ctx.get('AWARD_CUPCAKE_TEAM', 'N/A')}")
         
         doc.render(ctx)
         doc.save(out_path)
@@ -728,5 +840,11 @@ def validate_template_context(ctx):
 
 if __name__ == "__main__":
     # Test/debug mode
-    print("This is the enhanced weekly_recap.py with stats fixes")
-    print("Import this module and use build_weekly_recap() function")
+    print("This is the complete fixed updated_weekly_recap.py")
+    print("Key fixes implemented:")
+    print("- Fixed stats assignment bug (force assignment instead of setdefault)")
+    print("- Enhanced awards calculation from LLM text when API scores fail")
+    print("- Improved team logo mapping from team_logos.json")
+    print("- Comprehensive error handling and logging")
+    print("- Multiple fallback methods for player data extraction")
+    print("\nImport this module and use build_weekly_recap() function")
