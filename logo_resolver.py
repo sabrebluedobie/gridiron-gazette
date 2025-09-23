@@ -34,18 +34,48 @@ def _norm(s: str) -> str:
 
 
 def _load_overrides() -> Dict[str, str]:
-    p = Path("team_logos.json")
-    if not p.exists():
+    """
+    Load overrides from (in order):
+      1) TEAM_LOGOS_FILE env (e.g., team-logos.json)
+      2) team_logos.json (repo root)
+
+    Supports:
+      A) Flat { "Team A": "logos/team_logos/a.png", "LEAGUE_LOGO": "..." }
+      B) Nested { "leagues": { "887998": {...}, "Browns SEA/KC": {...} }, ... }
+    """
+    from os import getenv
+    def _read_json(path: Path) -> Dict:
+        if not path.exists(): return {}
+        try:
+            import json
+            return json.loads(path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return {}
+
+    fname = getenv("TEAM_LOGOS_FILE") or "team_logos.json"
+    p = Path(fname)
+    if not p.exists() and fname != "team_logos.json":
+        p = Path("team_logos.json")  # graceful fallback
+
+    data = _read_json(p)
+    if not isinstance(data, dict):
         return {}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        out = {}
-        for k, v in data.items():
-            if isinstance(v, str) and v:
-                out[str(k)] = v
-        return out
-    except Exception:
-        return {}
+
+    # Start with any flat (top-level) entries
+    flat: Dict[str, str] = {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
+
+    # Merge nested league block (if present)
+    leagues = data.get("leagues")
+    if isinstance(leagues, dict):
+        lid = getenv("LEAGUE_ID")
+        lname = getenv("LEAGUE_DISPLAY_NAME")
+        for key in (lid, lname):
+            if key and isinstance(leagues.get(key), dict):
+                nested = {k: v for k, v in leagues[key].items() if isinstance(k, str) and isinstance(v, str)}
+                flat.update(nested)  # nested wins over flat
+                break
+
+    return flat
 
 
 _OVERRIDES = _load_overrides()
