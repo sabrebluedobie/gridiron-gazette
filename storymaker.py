@@ -1,142 +1,107 @@
-"""
-storymaker.py — Sabre voice blurbs via OpenAI (or compact fallback).
-
-- Loads Sabre voice prompt from prompts/sabre_voice.txt or ENV override.
-- Builds lightweight matchup context from the espn_api League object.
-- Uses OpenAI Chat Completions; supports new SDK (OpenAI) or legacy (openai).
-"""
-
 from __future__ import annotations
 import os
-from pathlib import Path
 from typing import List, Dict, Any
 
-# Try new SDK first
 _OPENAI_NEW = False
 try:
-    from openai import OpenAI  # type: ignore
+    from openai import OpenAI
     _OPENAI_NEW = True
 except Exception:
     pass
 
-# Fallback legacy
 if not _OPENAI_NEW:
     try:
         import openai  # type: ignore
     except Exception:
         openai = None
 
-
-def _load_sabre_prompt() -> str:
-    env_text = os.getenv("GAZETTE_SABRE_PROMPT")
-    if env_text and env_text.strip():
-        return env_text.strip()
-
-    for p in (Path("prompts") / "sabre_voice.txt", Path("config") / "sabre_voice.txt"):
-        if p.exists():
-            try:
-                return p.read_text(encoding="utf-8").strip()
-            except Exception:
-                pass
-
-    # Safe default (short)
+def _load_sabre_prompt(week: int) -> str:
+    p = os.getenv("GAZETTE_SABRE_PROMPT")
+    if p: return p.strip()
     return (
-        "You are Sabre, the Gridiron Gazette’s Doberman mascot and beat reporter. "
-        "Voice: hard-working, witty, family-friendly. First person as Sabre. "
-        "No invented stats; only use provided data. "
-        "Call out swing play, top scorers, underperformers vs projection, and any decisive lineup choice. "
-        "Aim ~200 words. End with ‘Sabre out—see you in Week {week}.’"
+        f"You are Sabre, the Gridiron Gazette’s Doberman mascot and beat reporter. "
+        f"Voice: witty, clean, first-person as Sabre. "
+        f"Do not invent stats. Focus on the info provided. "
+        f"Call out the decisive swing, top effort, and any letdown. "
+        f"End with ‘Sabre out—see you in Week {week}.’"
     )
 
-
-def _norm_name(s: str) -> str:
-    import re, unicodedata
-    s = unicodedata.normalize("NFKC", s)
-    s = re.sub(r"[^\w\s\-’']", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
 def _player_line(p: Any) -> str:
-    name = getattr(p, "name", "Unknown")
-    pts = getattr(p, "points", getattr(p, "total_points", 0)) or 0
-    proj = getattr(p, "projected_total_points", getattr(p, "projected_points", 0)) or 0
-    if proj:
-        return f"{name} ({pts:.1f} vs {proj:.1f} proj)"
-    return f"{name} ({pts:.1f} pts)"
+    pts = getattr(p,"points", getattr(p,"total_points",0)) or 0
+    proj = getattr(p,"projected_total_points", getattr(p,"projected_points",0)) or 0
+    name = getattr(p,"name","Unknown")
+    return f"{name} ({pts:.1f} vs {proj:.1f} proj)" if proj else f"{name} ({pts:.1f} pts)"
 
+def _from_league_matchup(m: Any, year: int, week: int, max_words: int) -> str:
+    h, a = getattr(m,"home_team",None), getattr(m,"away_team",None)
+    hs, as_ = getattr(m,"home_score",0), getattr(m,"away_score",0)
+    lines = [f"Season {year}, Week {week}. {getattr(h,'team_name','Home')} ({hs}) vs {getattr(a,'team_name','Away')} ({as_})."]
+    for t, label in ((h,"Home"),(a,"Away")):
+        st = getattr(t,"starters",[]) or []
+        if st:
+            top = max(st, key=lambda p: getattr(p,"points", getattr(p,"total_points",0)) or 0)
+            lines.append(f"{label} top: {_player_line(top)}.")
+    lines.append(f"Write ~{max_words} words.")
+    return "\n".join(lines)
 
-def _matchup_ctx(m: Any, year: int, week: int, max_words: int) -> Dict[str, str]:
-    h = getattr(m, "home_team", None)
-    a = getattr(m, "away_team", None)
-    hs = getattr(m, "home_score", None)
-    as_ = getattr(m, "away_score", None)
+def _from_games_entry(g: Dict[str, Any], year: int, week: int, max_words: int) -> str:
+    h, a = g.get("HOME_TEAM_NAME","Home"), g.get("AWAY_TEAM_NAME","Away")
+    hs, as_ = g.get("HOME_SCORE","0"), g.get("AWAY_SCORE","0")
+    return (f"Season {year}, Week {week}. {h} ({hs}) vs {a} ({as_}). "
+            f"Use only this info. Write ~{max_words} words.")
 
-    def top(team):
-        starters = getattr(team, "starters", []) or []
-        if not starters: return None, None
-        # top, bust by projected delta
-        top_p = max(starters, key=lambda p: getattr(p, "points", getattr(p, "total_points", 0)) or 0)
-        bust_p = min(starters, key=lambda p: (getattr(p, "points", getattr(p, "total_points", 0)) or 0) - (getattr(p, "projected_total_points", getattr(p, "projected_points", 0)) or 0))
-        return _player_line(top_p), _player_line(bust_p)
-
-    ht, hb = top(h) if h else (None, None)
-    at, ab = top(a) if a else (None, None)
-
-    parts = [
-        f"Season {year}, Week {week}.",
-        f"{_norm_name(getattr(h,'team_name','Home'))} ({hs}) vs {_norm_name(getattr(a,'team_name','Away'))} ({as_}).",
-    ]
-    if ht: parts.append(f"Home top: {ht}.")
-    if at: parts.append(f"Away top: {at}.")
-    if hb: parts.append(f"Home under: {hb}.")
-    if ab: parts.append(f"Away under: {ab}.")
-    parts.append(f"Write no more than ~{max_words} words.")
-    return {"user": "\n".join(parts)}
-
-
-def _call_openai(messages: List[Dict[str, str]]) -> str:
+def _call_openai(messages: List[Dict[str,str]]) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is required for LLM blurbs.")
+        raise RuntimeError("OPENAI_API_KEY missing")
     model = os.getenv("GAZETTE_LLM_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
-
     if _OPENAI_NEW:
-        client = OpenAI(api_key=api_key)
-        resp = client.chat.completions.create(model=model, messages=messages, temperature=0.6)
+        resp = OpenAI(api_key=api_key).chat.completions.create(model=model, messages=messages, temperature=0.6)
         return (resp.choices[0].message.content or "").strip()
-    if openai is not None:
+    if 'openai' in globals() and openai:
         openai.api_key = api_key
         resp = openai.ChatCompletion.create(model=model, messages=messages, temperature=0.6)
         return (resp["choices"][0]["message"]["content"] or "").strip()
-    raise RuntimeError("OpenAI Python SDK not installed. Run `pip install openai`.")
+    raise RuntimeError("OpenAI SDK not installed")
 
-
-def generate_blurbs(league: Any, year: int, week: int, style: str = "sabre", max_words: int = 200) -> List[str]:
-    board = league.scoreboard(week)
+def generate_blurbs(
+    league: Any,
+    year: int,
+    week: int,
+    style: str = "sabre",
+    max_words: int = 200,
+    games: List[Dict[str,Any]] | None = None,   # NEW: use team scores if league not available
+) -> List[str]:
+    sys_prompt = _load_sabre_prompt(week) if style.lower()=="sabre" else "You write concise, factual fantasy recaps."
     out: List[str] = []
+    used_fallback = False
 
-    if style.lower() == "sabre":
-        system_prompt = _load_sabre_prompt().replace("{week}", str(week))
-    else:
-        system_prompt = "You are a concise fantasy football recap writer. Be factual and specific."
+    # Try league-based context first (with players)
+    try:
+        if league:
+            board = league.scoreboard(week)
+            for m in board:
+                messages = [{"role":"system","content":sys_prompt},
+                            {"role":"user","content":_from_league_matchup(m, year, week, max_words)}]
+                out.append(_call_openai(messages))
+            return out
+    except Exception:
+        used_fallback = True
 
-    for m in board:
-        u = _matchup_ctx(m, year, week, max_words)
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": u["user"]},
-        ]
-        try:
-            out.append(_call_openai(messages))
-        except Exception as e:
-            # Compact factual fallback
-            h = getattr(m, "home_team", None)
-            a = getattr(m, "away_team", None)
-            hs = getattr(m, "home_score", None)
-            as_ = getattr(m, "away_score", None)
-            out.append(
-                f"Week {week}: {getattr(a,'team_name','Away')} {as_} at {getattr(h,'team_name','Home')} {hs}. "
-                f"Sabre out—see you in Week {week}."
-            )
+    # Fallback: use team scores from games (no player details)
+    if games:
+        for g in games:
+            messages = [{"role":"system","content":sys_prompt},
+                        {"role":"user","content":_from_games_entry(g, year, week, max_words)}]
+            try:
+                out.append(_call_openai(messages))
+            except Exception:
+                h, a = g.get("HOME_TEAM_NAME","Home"), g.get("AWAY_TEAM_NAME","Away")
+                hs, as_ = g.get("HOME_SCORE","0"), g.get("AWAY_SCORE","0")
+                out.append(f"Week {week}: {h} {hs} vs {a} {as_}. Sabre out—see you in Week {week}.")
+        return out
+
+    # Last resort
+    if used_fallback:
+        return [f"Week {week} wrapped. Sabre out—see you in Week {week}."] * 6
     return out
