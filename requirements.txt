@@ -1,26 +1,197 @@
-# --- ESPN / HTTP ---
-espn-api==0.45.1
-requests>=2.31.0
+#!/usr/bin/env python3
+"""
+debug_espn_api.py - Helper to diagnose partial ESPN API data issues
+"""
 
-# --- DOCX templating/rendering ---
-docxtpl==0.16.7
-python-docx==1.1.2
-docxcompose==1.4.0
-Jinja2==3.1.4
-lxml>=5.3
-pillow>=10
+import json
+import time
+from typing import Any, Dict, List, Optional
+from pathlib import Path
 
-# --- LLM (Sabre blurbs) ---
-openai>=1.0.0
+def debug_league_data(league: Any, year: int, week: int, output_file: str = "debug_output.json") -> None:
+    """
+    Comprehensive debugging of ESPN league data to identify what's missing
+    """
+    debug_info = {
+        "league_id": getattr(league, 'league_id', 'unknown'),
+        "year": year,
+        "week": week,
+        "timestamp": time.time(),
+        "league_info": {},
+        "teams": [],
+        "matchups": [],
+        "scoreboard": [],
+        "errors": []
+    }
+    
+    # Basic league info
+    try:
+        debug_info["league_info"] = {
+            "name": getattr(league, 'settings', {}).get('name', 'Unknown'),
+            "size": getattr(league, 'settings', {}).get('team_count', 0),
+            "scoring_type": getattr(league, 'settings', {}).get('scoring_type', 'Unknown'),
+            "current_week": getattr(league, 'current_week', 'Unknown'),
+            "nfl_week": getattr(league, 'nfl_week', 'Unknown')
+        }
+    except Exception as e:
+        debug_info["errors"].append(f"League info error: {str(e)}")
 
-# --- YAML / environment ---
-PyYAML>=6.0.2
-python-dotenv>=1.0.1
+    # Team analysis
+    try:
+        teams = getattr(league, 'teams', [])
+        for team in teams:
+            team_info = {
+                "team_id": getattr(team, 'team_id', 'unknown'),
+                "team_name": getattr(team, 'team_name', 'Unknown'),
+                "owner": getattr(team, 'owner', 'Unknown'),
+                "wins": getattr(team, 'wins', 0),
+                "losses": getattr(team, 'losses', 0),
+                "has_roster": bool(getattr(team, 'roster', [])),
+                "roster_size": len(getattr(team, 'roster', [])) if hasattr(team, 'roster') else 0
+            }
+            debug_info["teams"].append(team_info)
+    except Exception as e:
+        debug_info["errors"].append(f"Teams error: {str(e)}")
 
-# --- PDF (optional, if you export PDFs) ---
-pikepdf>=9.0.0
+    # Scoreboard analysis (most likely source of partial data)
+    try:
+        scoreboard = league.scoreboard(week)
+        for i, matchup in enumerate(scoreboard):
+            matchup_info = {
+                "matchup_index": i,
+                "home_team": {
+                    "name": getattr(matchup.home_team, 'team_name', 'Unknown') if hasattr(matchup, 'home_team') else 'Missing',
+                    "score": getattr(matchup.home_team, 'scores', {}).get(week, 'Missing') if hasattr(matchup, 'home_team') else 'Missing',
+                    "has_lineup": bool(getattr(matchup.home_team, 'lineup', [])) if hasattr(matchup, 'home_team') else False,
+                    "lineup_size": len(getattr(matchup.home_team, 'lineup', [])) if hasattr(matchup, 'home_team') and hasattr(matchup.home_team, 'lineup') else 0
+                },
+                "away_team": {
+                    "name": getattr(matchup.away_team, 'team_name', 'Unknown') if hasattr(matchup, 'away_team') else 'Missing',
+                    "score": getattr(matchup.away_team, 'scores', {}).get(week, 'Missing') if hasattr(matchup, 'away_team') else 'Missing',
+                    "has_lineup": bool(getattr(matchup.away_team, 'lineup', [])) if hasattr(matchup, 'away_team') else False,
+                    "lineup_size": len(getattr(matchup.away_team, 'lineup', [])) if hasattr(matchup, 'away_team') and hasattr(matchup.away_team, 'lineup') else 0
+                },
+                "raw_matchup_attrs": [attr for attr in dir(matchup) if not attr.startswith('_')]
+            }
+            
+            # Check for player data in lineups
+            for side in ['home_team', 'away_team']:
+                team = getattr(matchup, side, None)
+                if team and hasattr(team, 'lineup'):
+                    lineup = getattr(team, 'lineup', [])
+                    player_data = []
+                    for player in lineup[:3]:  # Sample first 3 players
+                        player_info = {
+                            "name": getattr(player, 'name', 'Unknown'),
+                            "position": getattr(player, 'position', 'Unknown'),
+                            "points": getattr(player, 'points', 'Missing'),
+                            "projected_points": getattr(player, 'projected_points', 'Missing'),
+                            "slot_position": getattr(player, 'slot_position', 'Unknown'),
+                            "available_attrs": [attr for attr in dir(player) if not attr.startswith('_')]
+                        }
+                        player_data.append(player_info)
+                    matchup_info[f"{side}_sample_players"] = player_data
+            
+            debug_info["scoreboard"].append(matchup_info)
+            
+    except Exception as e:
+        debug_info["errors"].append(f"Scoreboard error: {str(e)}")
+        import traceback
+        debug_info["errors"].append(f"Scoreboard traceback: {traceback.format_exc()}")
 
-# --- Google APIs (optional, if you use Drive/Docs) ---
-google-api-python-client>=2.145.0
-google-auth>=2.33.0
-google-auth-oauthlib>=1.2.1
+    # Alternative data access methods
+    try:
+        # Try alternative ways to get matchup data
+        debug_info["alternative_access"] = {
+            "box_scores_available": hasattr(league, 'box_scores'),
+            "recent_activity_available": hasattr(league, 'recent_activity'),
+            "power_rankings_available": hasattr(league, 'power_rankings')
+        }
+        
+        if hasattr(league, 'box_scores'):
+            try:
+                box_scores = league.box_scores(week)
+                debug_info["alternative_access"]["box_scores_count"] = len(box_scores) if box_scores else 0
+            except Exception as e:
+                debug_info["alternative_access"]["box_scores_error"] = str(e)
+                
+    except Exception as e:
+        debug_info["errors"].append(f"Alternative access error: {str(e)}")
+
+    # Save debug output
+    with open(output_file, 'w') as f:
+        json.dump(debug_info, f, indent=2, default=str)
+    
+    print(f"Debug info saved to {output_file}")
+    
+    # Print summary
+    print("\n=== ESPN API DEBUG SUMMARY ===")
+    print(f"League: {debug_info['league_info'].get('name', 'Unknown')}")
+    print(f"Teams found: {len(debug_info['teams'])}")
+    print(f"Matchups found: {len(debug_info['scoreboard'])}")
+    print(f"Errors encountered: {len(debug_info['errors'])}")
+    
+    if debug_info['errors']:
+        print("\nErrors:")
+        for error in debug_info['errors']:
+            print(f"  - {error}")
+    
+    # Check for common partial data issues
+    issues = []
+    for matchup in debug_info['scoreboard']:
+        if matchup['home_team']['name'] == 'Missing' or matchup['away_team']['name'] == 'Missing':
+            issues.append(f"Matchup {matchup['matchup_index']}: Missing team names")
+        if matchup['home_team']['score'] == 'Missing' or matchup['away_team']['score'] == 'Missing':
+            issues.append(f"Matchup {matchup['matchup_index']}: Missing scores")
+        if not matchup['home_team']['has_lineup'] or not matchup['away_team']['has_lineup']:
+            issues.append(f"Matchup {matchup['matchup_index']}: Missing lineup data")
+    
+    if issues:
+        print(f"\nPartial Data Issues Found ({len(issues)}):")
+        for issue in issues:
+            print(f"  - {issue}")
+    else:
+        print("\nNo obvious partial data issues detected!")
+
+def test_api_robustness(league: Any, year: int, weeks: List[int], delay: float = 1.0) -> None:
+    """
+    Test API stability across multiple weeks with delays
+    """
+    results = {}
+    
+    for week in weeks:
+        print(f"Testing week {week}...")
+        try:
+            start_time = time.time()
+            scoreboard = league.scoreboard(week)
+            end_time = time.time()
+            
+            results[week] = {
+                "success": True,
+                "matchup_count": len(scoreboard) if scoreboard else 0,
+                "response_time": end_time - start_time,
+                "has_scores": all(
+                    hasattr(m, 'home_team') and hasattr(m, 'away_team')
+                    for m in (scoreboard or [])
+                )
+            }
+        except Exception as e:
+            results[week] = {
+                "success": False,
+                "error": str(e),
+                "response_time": None
+            }
+        
+        time.sleep(delay)  # Be nice to ESPN's servers
+    
+    print(f"\n=== API ROBUSTNESS TEST RESULTS ===")
+    for week, result in results.items():
+        status = "✓" if result["success"] else "✗"
+        print(f"Week {week}: {status} - {result}")
+
+# Usage example:
+if __name__ == "__main__":
+    # You would typically call this from your main script like:
+    # debug_league_data(league, year, week)
+    # test_api_robustness(league, year, [1, 2, 3, 4, 5])
+    print("Import this module and call debug_league_data(league, year, week)")

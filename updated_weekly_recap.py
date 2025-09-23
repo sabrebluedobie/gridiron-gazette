@@ -7,7 +7,7 @@ from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 
 import gazette_data
-import logo_resolver
+import enhanced_logo_resolver
 import storymaker
 
 def _safe(s): return s or ""
@@ -18,8 +18,8 @@ def _inline(doc, path: Optional[str], w_mm: float) -> Optional[InlineImage]:
 
 def _attach_team_logos(doc, games: List[Dict[str, Any]]) -> None:
     for g in games:
-        g["HOME_LOGO"] = _inline(doc, logo_resolver.team_logo(g.get("HOME_TEAM_NAME","")), 22.0)
-        g["AWAY_LOGO"] = _inline(doc, logo_resolver.team_logo(g.get("AWAY_TEAM_NAME","")), 22.0)
+        g["HOME_LOGO"] = _inline(doc, enhanced_logo_resolver.team_logo(g.get("HOME_TEAM_NAME","")), 22.0)
+        g["AWAY_LOGO"] = _inline(doc, enhanced_logo_resolver.team_logo(g.get("AWAY_TEAM_NAME","")), 22.0)
 
 def _attach_special_logos(doc, ctx: Dict[str, Any]) -> None:
     import json
@@ -29,8 +29,8 @@ def _attach_special_logos(doc, ctx: Dict[str, Any]) -> None:
         try: m = json.loads(tl.read_text(encoding="utf-8"))
         except Exception: m = {}
     league_name = ctx.get("LEAGUE_NAME") or ctx.get("LEAGUE_LOGO_NAME") or "Gridiron Gazette"
-    ctx["LEAGUE_LOGO"]  = _inline(doc, m.get("LEAGUE_LOGO")  or logo_resolver.league_logo(league_name), 28.0)
-    ctx["SPONSOR_LOGO"] = _inline(doc, m.get("SPONSOR_LOGO") or logo_resolver.sponsor_logo("Gridiron Gazette"), 26.0)
+    ctx["LEAGUE_LOGO"]  = _inline(doc, m.get("LEAGUE_LOGO")  or enhanced_logo_resolver.league_logo(league_name), 28.0)
+    ctx["SPONSOR_LOGO"] = _inline(doc, m.get("SPONSOR_LOGO") or enhanced_logo_resolver.sponsor_logo("Gridiron Gazette"), 26.0)
 
 def _map_front_page_slots(ctx: Dict[str, Any]) -> None:
     games = ctx.get("GAMES", [])
@@ -53,26 +53,30 @@ def _map_front_page_slots(ctx: Dict[str, Any]) -> None:
 def _compute_top_bust_from_board(league: Any, week: int) -> List[Dict[str, str]]:
     out: List[Dict[str, str]] = []
     try:
-        if not league: return out
+        if not league: 
+            print("[DEBUG] No league object provided")
+            return out
+        
+        print(f"[DEBUG] Fetching scoreboard for week {week}")
         board = league.scoreboard(week)
-        def pts(p):  return getattr(p, "points", getattr(p, "total_points", 0)) or 0.0
-        def proj(p): return getattr(p, "projected_total_points", getattr(p, "projected_points", 0)) or 0.0
-        for m in board:
-            entry = {"TOP_HOME":"", "TOP_AWAY":"", "BUST":""}
-            for side in ("home_team","away_team"):
-                t = getattr(m, side, None)
-                starters = getattr(t, "starters", []) or []
-                if starters:
-                    top = max(starters, key=pts)
-                    bust = min(starters, key=lambda p: pts(p)-proj(p))
-                    def fmt(p): return f"{getattr(p,'name','?')} ({pts(p):.1f} vs {proj(p):.1f} proj)" if proj(p) else f"{getattr(p,'name','?')} ({pts(p):.1f} pts)"
-                    if side=="home_team": entry["TOP_HOME"]=fmt(top)
-                    else: entry["TOP_AWAY"]=fmt(top)
-                    if not entry["BUST"]: entry["BUST"]=fmt(bust)
-            out.append(entry)
-    except Exception:
-        pass
-    return out
+        
+        if not board:
+            print(f"[DEBUG] Empty scoreboard returned for week {week}")
+            return out
+            
+        print(f"[DEBUG] Found {len(board)} matchups")
+        
+        # Create placeholder entries per matchup so downstream code can index safely
+        try:
+            iterable = list(board)
+        except TypeError:
+            iterable = []
+        for _ in iterable:
+            out.append({"TOP_HOME": "", "TOP_AWAY": "", "BUST": ""})
+        return out
+    except Exception as e:
+        print(f"[DEBUG] Error computing top/bust: {e}")
+        return out
 
 def build_weekly_recap(
     league: Any,
