@@ -215,81 +215,123 @@ def _fix_league_logo_resolution(ctx: Dict[str, Any]) -> None:
 
 
 def _attach_images(ctx: Dict[str, Any], doc: DocxTemplate) -> None:
-    """Attach logos with fixed league logo handling"""
-    league_name = str(ctx.get("LEAGUE_NAME") or "")
-    sponsor_name = str(ctx.get("SPONSOR_NAME") or "Gridiron Gazette")
-
-    # League logo - with direct path fix
+    """Attach all logos with comprehensive debugging"""
+    import logo_resolver as logos
+    
+    log.info("=" * 50)
+    log.info("LOGO ATTACHMENT DEBUG")
+    log.info("=" * 50)
+    
+    # League logo
     try:
-        # First try the direct path fix
-        direct_path = ctx.get("_LEAGUE_LOGO_PATH")
-        if direct_path and Path(direct_path).exists():
-            lg = logos.sanitize_logo_for_docx(direct_path)
-            if lg and Path(lg).exists():
-                ctx["LEAGUE_LOGO"] = InlineImage(doc, lg, width=Mm(25))
-                log.info(f"League logo attached from direct path: {direct_path}")
-                return
+        league_name = str(ctx.get("LEAGUE_NAME", ""))
+        log.info(f"Looking for league logo for: '{league_name}'")
         
-        # Fall back to normal resolution
         lg_raw = logos.league_logo(league_name)
+        log.info(f"League logo resolver returned: {lg_raw}")
+        
         if lg_raw:
             lg = logos.sanitize_logo_for_docx(lg_raw)
+            log.info(f"Sanitized league logo: {lg}")
+            
             if lg and Path(lg).exists():
                 ctx["LEAGUE_LOGO"] = InlineImage(doc, lg, width=Mm(25))
-                log.info(f"League logo attached via resolver: {lg}")
+                log.info("✅ League logo attached successfully")
             else:
-                log.warning(f"League logo sanitization failed: {lg_raw}")
+                log.error(f"❌ Sanitized league logo doesn't exist: {lg}")
         else:
-            log.warning(f"No league logo found for: {league_name}")
+            log.error("❌ No raw league logo found")
     except Exception as e:
-        log.error(f"Error attaching league logo: {e}")
+        log.error(f"❌ League logo error: {e}")
 
-    # Sponsor logo (unchanged)
+    # Sponsor logo
     try:
+        sponsor_name = str(ctx.get("SPONSOR_NAME", "Gridiron Gazette"))
+        log.info(f"Looking for sponsor logo for: '{sponsor_name}'")
+        
         sp_raw = logos.sponsor_logo(sponsor_name)
+        log.info(f"Sponsor logo resolver returned: {sp_raw}")
+        
         if sp_raw:
             sp = logos.sanitize_logo_for_docx(sp_raw)
+            log.info(f"Sanitized sponsor logo: {sp}")
+            
             if sp and Path(sp).exists():
                 ctx["SPONSOR_LOGO"] = InlineImage(doc, sp, width=Mm(25))
-                log.info(f"Sponsor logo attached: {sp}")
+                log.info("✅ Sponsor logo attached successfully")
             else:
-                log.warning(f"Sponsor logo sanitization failed: {sp_raw}")
+                log.error(f"❌ Sanitized sponsor logo doesn't exist: {sp}")
         else:
-            log.warning(f"No sponsor logo found for: {sponsor_name}")
+            log.error("❌ No raw sponsor logo found")
     except Exception as e:
-        log.error(f"Error attaching sponsor logo: {e}")
+        log.error(f"❌ Sponsor logo error: {e}")
 
-    # Team logos (unchanged)
+    # Team logos - this is the critical part
+    log.info("TEAM LOGOS:")
+    log.info("-" * 30)
+    
     for i in range(1, 8):
         home_key = f"MATCHUP{i}_HOME"
         away_key = f"MATCHUP{i}_AWAY"
         
-        # Home team logo
-        if home_key in ctx and ctx[home_key]:
-            try:
-                home_name = str(ctx[home_key])
-                hp_raw = logos.team_logo(home_name)
-                if hp_raw:
-                    hp = logos.sanitize_logo_for_docx(hp_raw)
-                    if hp and Path(hp).exists():
-                        ctx[f"MATCHUP{i}_HOME_LOGO"] = InlineImage(doc, hp, width=Mm(22))
-                        log.debug(f"Home logo attached: MATCHUP{i}_HOME_LOGO")
-            except Exception as e:
-                log.error(f"Error attaching home logo {i}: {e}")
-
-        # Away team logo  
-        if away_key in ctx and ctx[away_key]:
-            try:
-                away_name = str(ctx[away_key])
-                ap_raw = logos.team_logo(away_name)
-                if ap_raw:
-                    ap = logos.sanitize_logo_for_docx(ap_raw)
-                    if ap and Path(ap).exists():
-                        ctx[f"MATCHUP{i}_AWAY_LOGO"] = InlineImage(doc, ap, width=Mm(22))
-                        log.debug(f"Away logo attached: MATCHUP{i}_AWAY_LOGO")
-            except Exception as e:
-                log.error(f"Error attaching away logo {i}: {e}")
-
+        home_name = ctx.get(home_key, "")
+        away_name = ctx.get(away_key, "")
+        
+        if not (home_name and away_name):
+            log.info(f"MATCHUP{i}: No teams found")
+            continue
+            
+        log.info(f"MATCHUP{i}: '{home_name}' vs '{away_name}'")
+        
+        # HOME TEAM LOGO
+        try:
+            log.info(f"  Looking for HOME logo: '{home_name}'")
+            home_logo_raw = logos.team_logo(home_name)
+            log.info(f"  Home logo resolver returned: {home_logo_raw}")
+            
+            if home_logo_raw:
+                home_logo = logos.sanitize_logo_for_docx(home_logo_raw)
+                log.info(f"  Sanitized home logo: {home_logo}")
+                
+                if home_logo and Path(home_logo).exists():
+                    home_inline = InlineImage(doc, home_logo, width=Mm(22))
+                    ctx[f"MATCHUP{i}_HOME_LOGO"] = home_inline
+                    log.info(f"  ✅ HOME logo attached: MATCHUP{i}_HOME_LOGO")
+                else:
+                    log.error(f"  ❌ Sanitized home logo doesn't exist: {home_logo}")
+            else:
+                log.error(f"  ❌ No raw home logo found for: '{home_name}'")
+        except Exception as e:
+            log.error(f"  ❌ Home logo error for '{home_name}': {e}")
+        
+        # AWAY TEAM LOGO  
+        try:
+            log.info(f"  Looking for AWAY logo: '{away_name}'")
+            away_logo_raw = logos.team_logo(away_name)
+            log.info(f"  Away logo resolver returned: {away_logo_raw}")
+            
+            if away_logo_raw:
+                away_logo = logos.sanitize_logo_for_docx(away_logo_raw)
+                log.info(f"  Sanitized away logo: {away_logo}")
+                
+                if away_logo and Path(away_logo).exists():
+                    away_inline = InlineImage(doc, away_logo, width=Mm(22))
+                    ctx[f"MATCHUP{i}_AWAY_LOGO"] = away_inline
+                    log.info(f"  ✅ AWAY logo attached: MATCHUP{i}_AWAY_LOGO")
+                else:
+                    log.error(f"  ❌ Sanitized away logo doesn't exist: {away_logo}")
+            else:
+                log.error(f"  ❌ No raw away logo found for: '{away_name}'")
+        except Exception as e:
+            log.error(f"  ❌ Away logo error for '{away_name}': {e}")
+    
+    # Summary
+    logo_vars = [k for k in ctx.keys() if "LOGO" in k]
+    log.info("=" * 50)
+    log.info(f"FINAL LOGO VARIABLES: {len(logo_vars)}")
+    for var in logo_vars:
+        log.info(f"  {var}: {'✅ InlineImage' if hasattr(ctx[var], 'width') else '❌ Not InlineImage'}")
+    log.info("=" * 50)
 
 def render_docx(template_path: str, outdocx: str, context: Dict[str, Any]) -> str:
     """Render DOCX with exact template variable matching + blurb support"""
