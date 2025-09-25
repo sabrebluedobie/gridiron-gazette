@@ -19,15 +19,3 @@ recaps/
 leagues.local.json
 .env.local
 *.docx
-folders.zip
-*.zip
-*.7z
-*.rar
-*.tar
-*.tar.gz
-recaps/
-__pycache__/
-folders.zip
-*.zip
-recaps/
-__pycache__/
