@@ -2,10 +2,12 @@
 storymaker.py — Gridiron Gazette
 --------------------------------
 Generates Sabre-style recaps and short blurbs using an injected LLM callable.
+INCLUDES MARKDOWN TO FORMATTED TEXT CONVERSION
 
 • Recaps: 200–250 words, 2–3 paragraphs, 3–5 sentences each paragraph.
 • Short blurbs: 1–2 sentences (25–45 words).
 • New sign-off (with paw print) auto-appended to recaps.
+• Converts markdown formatting to clean text for DOCX
 
 Usage:
 
@@ -36,7 +38,7 @@ SABRE_SIGNOFF = "—Sabre, your hilariously snarky 4-legged Gridiron Gazette rep
 
 SABRE_PROMPT: Dict[str, Any] = {
     "role": "mascot-reporter",
-    "persona": "Sabre — cropped-and-docked blue (grey) Doberman; Gazette’s loud-mouthed mascot who thinks he’s ESPN’s funniest analyst.",
+    "persona": "Sabre — cropped-and-docked blue (grey) Doberman; Gazette's loud-mouthed mascot who thinks he's ESPN's funniest analyst.",
     "goals": [
         "Deliver accurate game recaps and matchup blurbs using real stats.",
         "Make readers laugh out loud with jabs, zingers, and football-fluent metaphors.",
@@ -69,12 +71,12 @@ SABRE_PROMPT: Dict[str, Any] = {
     "rhetorical_devices": {
         "metaphors": ["folded like a lawn chair in a hurricane", "tackled like a coupon in Black Friday"],
         "comparisons": ["like my tail when the treat jar pops", "like a punt into a headwind"],
-        "fourth_wall": ["Sabre here—I don’t make the rules, I just howl them."],
+        "fourth_wall": ["Sabre here—I don't make the rules, I just howl them."],
     },
     "must_include": [
         "One concrete detail: {stat_line|swing|injury_note|bench_mistake}.",
         "One metaphor or simile.",
-        "One clean jab that targets a play/decision (not a person’s identity).",
+        "One clean jab that targets a play/decision (not a person's identity).",
         "Clear outcome or implication (why it mattered).",
     ],
     "signoff": {
@@ -82,6 +84,79 @@ SABRE_PROMPT: Dict[str, Any] = {
         "usage": "Add on the final line for end-of-section recaps; omit in tight lists.",
     },
 }
+
+# ===============================
+# MARKDOWN CONVERSION FUNCTIONS
+# ===============================
+
+def clean_markdown_for_docx(text: str) -> str:
+    """
+    Convert markdown formatting to plain text for DOCX templates.
+    Removes markdown syntax while preserving the actual content.
+    
+    Examples:
+        **Bold Text** -> Bold Text
+        *Italic Text* -> Italic Text
+        ### Header -> Header
+        `Code` -> Code
+    """
+    if not text:
+        return text
+    
+    # Store original for comparison
+    original = text
+    
+    # Remove bold markdown (**text** or __text__ -> text)
+    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+    text = re.sub(r'__(.*?)__', r'\1', text)
+    
+    # Remove italic markdown (*text* or _text_ -> text)
+    # Be careful not to remove single asterisks that aren't markdown
+    text = re.sub(r'(?<!\*)\*(?!\*)([^\*]+)\*(?!\*)', r'\1', text)
+    text = re.sub(r'(?<!_)_(?!_)([^_]+)_(?!_)', r'\1', text)
+    
+    # Remove code backticks (`text` -> text)
+    text = re.sub(r'`([^`]+)`', r'\1', text)
+    
+    # Remove headers (### text -> text)
+    text = re.sub(r'^#{1,6}\s*', '', text, flags=re.MULTILINE)
+    
+    # Remove strikethrough (~~text~~ -> text)
+    text = re.sub(r'~~(.*?)~~', r'\1', text)
+    
+    # Remove blockquotes (> text -> text)
+    text = re.sub(r'^>\s*', '', text, flags=re.MULTILINE)
+    
+    # Remove horizontal rules
+    text = re.sub(r'^[\-\*_]{3,}$', '', text, flags=re.MULTILINE)
+    
+    # Clean up any remaining artifacts
+    text = text.strip()
+    
+    if text != original:
+        logger.debug(f"Cleaned markdown: '{original[:50]}...' -> '{text[:50]}...'")
+    
+    return text
+
+def clean_all_markdown_in_dict(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Recursively clean markdown from all string values in a dictionary.
+    Returns a new dictionary with cleaned values.
+    """
+    cleaned = {}
+    for key, value in data.items():
+        if isinstance(value, str):
+            cleaned[key] = clean_markdown_for_docx(value)
+        elif isinstance(value, dict):
+            cleaned[key] = clean_all_markdown_in_dict(value)
+        elif isinstance(value, list):
+            cleaned[key] = [
+                clean_markdown_for_docx(item) if isinstance(item, str) else item
+                for item in value
+            ]
+        else:
+            cleaned[key] = value
+    return cleaned
 
 # ===============
 # Data structures
@@ -149,6 +224,7 @@ def _trim_to_words(text: str, min_words: int, max_words: int) -> str:
     return text
 
 def _append_signoff(text: str) -> str:
+    """Append Sabre's signature if not already present."""
     text = text.rstrip()
     if not text.endswith(SABRE_SIGNOFF):
         text += f"\n\n{SABRE_SIGNOFF}"
@@ -175,7 +251,7 @@ def _matchup_json(data: MatchupData) -> str:
 # Message assembly
 # ==================
 SYSTEM_BASE = (
-    "You are Sabre, the Gridiron Gazette’s mascot-reporter. "
+    "You are Sabre, the Gridiron Gazette's mascot-reporter. "
     "Persona: cropped-and-docked blue (grey) Doberman; loud-mouthed, witty, but credible. "
     "Tone: snarky, witty, sharp; late-night sports commentator on triple espresso. "
     "Style: roast the play, not the person; PG-13; mix real stats with jokes. "
@@ -221,21 +297,33 @@ class StoryMaker:
         top_p: float = 0.9,
         max_tokens: int = 900,
         enforce_bounds: bool = True,
+        clean_markdown: bool = True,  # NEW: Auto-clean markdown
     ) -> str:
-        """Create a Sabre recap (200–250 words, 2–3 paragraphs) with sign-off."""
+        """
+        Create a Sabre recap (200–250 words, 2–3 paragraphs) with sign-off.
+        Automatically cleans markdown formatting for DOCX output.
+        """
         if self.llm is None:
-            return self._template_recap(data)
-
-        messages = _build_messages("recap", data)
-        draft = (self.llm(messages, temperature=temperature, top_p=top_p, max_tokens=max_tokens) or "").strip()
-
-        if enforce_bounds:
-            if _word_count(draft) < 120:
-                draft = self._template_recap(data)
-            draft = _ensure_paragraphs(draft, target_paras=2)
-            draft = _trim_to_words(draft, min_words=200, max_words=250)
-            draft = _append_signoff(draft)
-        return draft
+            recap = self._template_recap(data)
+        else:
+            messages = _build_messages("recap", data)
+            draft = (self.llm(messages, temperature=temperature, top_p=top_p, max_tokens=max_tokens) or "").strip()
+            
+            if enforce_bounds:
+                if _word_count(draft) < 120:
+                    draft = self._template_recap(data)
+                draft = _ensure_paragraphs(draft, target_paras=2)
+                draft = _trim_to_words(draft, min_words=200, max_words=250)
+                draft = _append_signoff(draft)
+            
+            recap = draft
+        
+        # Clean markdown formatting if requested
+        if clean_markdown:
+            recap = clean_markdown_for_docx(recap)
+            logger.debug(f"Cleaned markdown from recap for {data.team_a} vs {data.team_b}")
+        
+        return recap
 
     def generate_blurb(
         self,
@@ -244,24 +332,37 @@ class StoryMaker:
         top_p: float = 0.9,
         max_tokens: int = 200,
         enforce_bounds: bool = True,
+        clean_markdown: bool = True,  # NEW: Auto-clean markdown
     ) -> str:
-        """Create a Sabre short blurb (1–2 sentences, 25–45 words)."""
+        """
+        Create a Sabre short blurb (1–2 sentences, 25–45 words).
+        Automatically cleans markdown formatting for DOCX output.
+        """
         if self.llm is None:
-            return self._template_blurb(data)
-
-        messages = _build_messages("blurb", data)
-        draft = (self.llm(messages, temperature=temperature, top_p=top_p, max_tokens=max_tokens) or "").strip()
-
-        if enforce_bounds:
-            if _word_count(draft) < 20:
-                draft = self._template_blurb(data)
-            # Remove any accidental sign-off
-            draft = draft.replace(SABRE_SIGNOFF, "").strip()
-            draft = _trim_to_words(draft, min_words=25, max_words=45)
-        return draft
+            blurb = self._template_blurb(data)
+        else:
+            messages = _build_messages("blurb", data)
+            draft = (self.llm(messages, temperature=temperature, top_p=top_p, max_tokens=max_tokens) or "").strip()
+            
+            if enforce_bounds:
+                if _word_count(draft) < 20:
+                    draft = self._template_blurb(data)
+                # Remove any accidental sign-off
+                draft = draft.replace(SABRE_SIGNOFF, "").strip()
+                draft = _trim_to_words(draft, min_words=25, max_words=45)
+            
+            blurb = draft
+        
+        # Clean markdown formatting if requested
+        if clean_markdown:
+            blurb = clean_markdown_for_docx(blurb)
+            logger.debug(f"Cleaned markdown from blurb for {data.team_a} vs {data.team_b}")
+        
+        return blurb
 
     # ---------- Fallback templates (no-LLM mode) ----------
     def _template_recap(self, d: MatchupData) -> str:
+        """Fallback template when no LLM is available."""
         hook = f"This one played less like chess and more like bumper cars—{d.team_a} and {d.team_b} turned chaos into content."
         facts = []
         if d.score_a is not None and d.score_b is not None:
@@ -294,7 +395,63 @@ class StoryMaker:
         return body
 
     def _template_blurb(self, d: MatchupData) -> str:
+        """Fallback template for short blurbs when no LLM is available."""
         core = f"{d.team_a} vs. {d.team_b}: a yo-yo of momentum and questionable decisions."
         if d.winner:
             core += f" {d.winner} escapes with the W; film rooms get busy tomorrow."
         return _trim_to_words(core, min_words=25, max_words=45)
+
+# ==================
+# Testing utilities
+# ==================
+
+def test_markdown_conversion():
+    """Test the markdown conversion functionality."""
+    test_cases = [
+        ("**Bold Text**", "Bold Text"),
+        ("*Italic Text*", "Italic Text"),
+        ("__Also Bold__", "Also Bold"),
+        ("_Also Italic_", "Also Italic"),
+        ("`Code Text`", "Code Text"),
+        ("### Header Text", "Header Text"),
+        ("~~Strikethrough~~", "Strikethrough"),
+        ("> Quoted text", "Quoted text"),
+        ("**Top Play**: The big moment", "Top Play: The big moment"),
+        ("Normal text with **bold** and *italic* mixed", "Normal text with bold and italic mixed"),
+        ("The team **dominated** with *precision* plays", "The team dominated with precision plays"),
+    ]
+    
+    print("Testing Markdown Conversion:")
+    print("=" * 50)
+    all_passed = True
+    
+    for input_text, expected in test_cases:
+        result = clean_markdown_for_docx(input_text)
+        passed = result == expected
+        status = "✅" if passed else "❌"
+        
+        if not passed:
+            all_passed = False
+            
+        print(f"{status} Input: '{input_text}'")
+        print(f"   Expected: '{expected}'")
+        print(f"   Got: '{result}'")
+        print()
+    
+    print("=" * 50)
+    if all_passed:
+        print("✅ All markdown conversion tests passed!")
+    else:
+        print("❌ Some tests failed. Check the output above.")
+    
+    return all_passed
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        test_markdown_conversion()
+    else:
+        print("StoryMaker - Gridiron Gazette")
+        print("Usage: python storymaker.py test")
+        print("\nThis module generates Sabre's witty commentary with markdown cleaning.")
