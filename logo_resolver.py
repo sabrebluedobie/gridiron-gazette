@@ -1,484 +1,333 @@
-"""
-Logo Resolver for Gridiron Gazette
-Handles team, league, and sponsor logo resolution with fuzzy matching
-"""
-
-import os
+from __future__ import annotations
 import json
-import logging
+import os
 import re
+import logging
 from pathlib import Path
-from typing import Dict, Optional, Tuple
-from difflib import SequenceMatcher
+from typing import Dict, Optional
 
 log = logging.getLogger("logo_resolver")
 
-# ================= Configuration =================
+# --- Config / locations ---
+TEAM_LOGOS_FILE = os.getenv("TEAM_LOGOS_FILE", "team_logos.json")
+LEAGUE_LOGOS_FILE = os.getenv("LEAGUE_LOGOS_FILE", "league_logos.json")
+SPONSOR_LOGOS_FILE = os.getenv("SPONSOR_LOGOS_FILE", "sponsor_logos.json")
 
-# Default paths
-DEFAULT_LOGO_DIRS = [
-    "./logos",
-    "./logos/team_logos",
-    "./logos/league_logos", 
-    "./logos/sponsor_logos",
-    "./media",
-    "."
+# Primary logo directory
+LOGO_DIRS = [
+    Path("./logos/team_logos"),
+    Path("logos/team_logos"),
+    Path("logos/generated_logos"),
+    Path("logos"),
 ]
 
-# Image extensions to search
-IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp']
+DEFAULT_TEAM_LOGO = Path("logos/_default.png")
+DEFAULT_LEAGUE_DIR = Path("logos/league_logos")
+DEFAULT_SPONSOR_DIR = Path("logos/sponsor_logos")
 
-# ================= Utility Functions =================
+def _load_json(path: Path) -> Dict[str, str]:
+    """Load JSON file with error handling"""
+    if not path.exists():
+        log.debug(f"JSON file not found: {path}")
+        return {}
+    try:
+        content = path.read_text(encoding="utf-8")
+        data = json.loads(content) or {}
+        log.debug(f"Loaded {len(data)} entries from {path}")
+        return data
+    except Exception as e:
+        log.warning(f"Failed to load JSON from {path}: {e}")
+        return {}
 
-def normalize_name(name: str) -> str:
-    """
-    Normalize a name for comparison
-    - Lowercase
-    - Remove special characters
-    - Remove extra whitespace
-    """
-    if not name:
+def _norm(s: str) -> str:
+    """Normalize team name for matching - aggressive character removal"""
+    if not s:
         return ""
+    s = str(s).lower().strip()
     
-    # Convert to lowercase
-    normalized = name.lower()
+    # Remove ALL special characters (emojis, punctuation, etc.) - keep only letters, numbers, spaces
+    s = re.sub(r"[^a-zA-Z0-9\s]", "", s)  # Remove everything except alphanumeric and spaces
+    s = re.sub(r"\s+", "_", s)            # Replace spaces with underscores
+    s = re.sub(r"_+", "_", s)             # Collapse multiple underscores
+    s = s.strip("_")                      # Remove leading/trailing underscores
     
-    # Remove common emoji and special characters but keep alphanumeric
-    normalized = re.sub(r'[^\w\s-]', '', normalized)
-    
-    # Replace multiple spaces with single space
-    normalized = re.sub(r'\s+', ' ', normalized)
-    
-    # Remove leading/trailing whitespace
-    normalized = normalized.strip()
-    
-    return normalized
+    return s
 
-def create_slug(name: str) -> str:
-    """Create a slug version of the name for filename matching"""
-    if not name:
-        return ""
+def _build_filesystem_logo_map() -> Dict[str, str]:
+    """Build a comprehensive map of all available logos in the filesystem"""
+    logo_map = {}
     
-    slug = normalize_name(name)
-    # Replace spaces with hyphens or underscores
-    slug = re.sub(r'[\s]+', '-', slug)
-    # Remove any remaining special characters
-    slug = re.sub(r'[^a-z0-9-_]', '', slug)
+    # Scan the primary logos directory
+    primary_dir = Path("./logos/team_logos")
+    if primary_dir.exists():
+        log.info(f"Scanning logo directory: {primary_dir}")
+        
+        for logo_file in primary_dir.glob("*.*"):
+            if logo_file.is_file() and logo_file.suffix.lower() in ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg']:
+                # Create multiple possible team name variations for this logo
+                base_name = logo_file.stem
+                
+                # Direct filename mapping
+                logo_map[_norm(base_name)] = str(logo_file)
+                
+                # Common variations
+                variations = [
+                    base_name.replace("_", " "),           # "Team_Name" -> "Team Name"
+                    base_name.replace("_", ""),            # "Team_Name" -> "TeamName"  
+                    base_name.replace("-", " "),           # "Team-Name" -> "Team Name"
+                    base_name.replace("-", ""),            # "Team-Name" -> "TeamName"
+                    base_name.replace(".", " "),           # "Team.Name" -> "Team Name"
+                    base_name.replace(".", ""),            # "Team.Name" -> "TeamName"
+                ]
+                
+                for variation in variations:
+                    norm_var = _norm(variation)
+                    if norm_var and norm_var not in logo_map:
+                        logo_map[norm_var] = str(logo_file)
+                
+                log.debug(f"Mapped logo: {base_name} -> {logo_file}")
+        
+        log.info(f"Built filesystem logo map with {len(logo_map)} mappings")
+    else:
+        log.warning(f"Logo directory not found: {primary_dir}")
     
-    return slug
+    return logo_map
 
-def fuzzy_match_score(str1: str, str2: str) -> float:
-    """Calculate fuzzy match score between two strings (0-1)"""
-    return SequenceMatcher(None, str1.lower(), str2.lower()).ratio()
-
-# ================= Logo Finder =================
-
-def find_logo_file(name: str, logo_type: str = "team") -> Optional[str]:
-    """
-    Find a logo file using various matching strategies
-    
-    Args:
-        name: The name to search for
-        logo_type: Type of logo ('team', 'league', 'sponsor')
-    
-    Returns:
-        Path to the logo file if found, None otherwise
-    """
-    if not name:
+def _fuzzy_match_logo(team_name: str, logo_map: Dict[str, str]) -> Optional[str]:
+    """Find the best logo match for a team name"""
+    if not team_name:
+        return None
+        
+    norm_team = _norm(team_name)
+    if not norm_team:
         return None
     
-    # Normalize the search name
-    normalized = normalize_name(name)
-    slug = create_slug(name)
+    # 1. Exact match
+    if norm_team in logo_map:
+        log.debug(f"Exact logo match: '{team_name}' -> {logo_map[norm_team]}")
+        return logo_map[norm_team]
     
-    # Build list of possible filenames
-    possible_names = [
-        name,  # Original name
-        normalized,  # Normalized version
-        slug,  # Slug version
-        normalized.replace(' ', '_'),  # Underscore version
-        normalized.replace(' ', '-'),  # Hyphen version
-        normalized.replace(' ', ''),  # No spaces version
-    ]
+    # 2. Substring matches (both directions)
+    for logo_key, logo_path in logo_map.items():
+        if norm_team in logo_key or logo_key in norm_team:
+            log.debug(f"Substring logo match: '{team_name}' -> '{logo_key}' -> {logo_path}")
+            return logo_path
     
-    # Add variations without common suffixes
-    for suffix in ['fc', 'team', 'logo', 'club']:
-        for pname in list(possible_names):
-            if pname.endswith(suffix):
-                possible_names.append(pname[:-len(suffix)].strip())
-    
-    # Search directories based on logo type
-    search_dirs = DEFAULT_LOGO_DIRS.copy()
-    if logo_type == "league":
-        search_dirs.insert(0, "./logos/league_logos")
-    elif logo_type == "sponsor":
-        search_dirs.insert(0, "./logos/sponsor_logos")
-    else:  # team
-        search_dirs.insert(0, "./logos/team_logos")
-    
-    # First pass: exact match
-    for directory in search_dirs:
-        if not os.path.exists(directory):
-            continue
+    # 3. Word-level matching for multi-word team names
+    team_words = set(norm_team.split("_"))
+    if len(team_words) > 1:
+        best_match = None
+        best_score = 0
         
-        for possible_name in possible_names:
-            for ext in IMAGE_EXTENSIONS:
-                # Try exact match
-                filepath = os.path.join(directory, f"{possible_name}{ext}")
-                if os.path.exists(filepath):
-                    log.info(f"Found exact match logo: {filepath}")
-                    return filepath
-    
-    # Second pass: fuzzy match
-    best_match = None
-    best_score = 0.7  # Minimum threshold
-    
-    for directory in search_dirs:
-        if not os.path.exists(directory):
-            continue
+        for logo_key, logo_path in logo_map.items():
+            logo_words = set(logo_key.split("_"))
+            common_words = team_words.intersection(logo_words)
+            if common_words:
+                score = len(common_words) / max(len(team_words), len(logo_words))
+                if score > best_score and score > 0.4:  # At least 40% word overlap
+                    best_match = logo_path
+                    best_score = score
         
-        try:
-            for filename in os.listdir(directory):
-                # Check if it's an image file
-                if not any(filename.lower().endswith(ext) for ext in IMAGE_EXTENSIONS):
-                    continue
-                
-                # Get filename without extension
-                base_name = os.path.splitext(filename)[0]
-                
-                # Calculate match scores
-                for possible_name in possible_names:
-                    score = fuzzy_match_score(base_name, possible_name)
-                    
-                    if score > best_score:
-                        best_score = score
-                        best_match = os.path.join(directory, filename)
-        except Exception as e:
-            log.warning(f"Error scanning directory {directory}: {e}")
+        if best_match:
+            log.debug(f"Word-level logo match: '{team_name}' -> {best_match} (score: {best_score:.2f})")
+            return best_match
     
-    if best_match:
-        log.info(f"Found fuzzy match logo: {best_match} (score: {best_score:.2f})")
-        return best_match
-    
-    log.warning(f"No logo found for '{name}' (type: {logo_type})")
     return None
 
-# ================= JSON-based Logo Resolution =================
+# Cache the filesystem logo map
+_FILESYSTEM_LOGO_MAP: Optional[Dict[str, str]] = None
 
-class LogoResolver:
-    """Main logo resolver class using JSON configuration files"""
+def _get_filesystem_logo_map() -> Dict[str, str]:
+    """Get cached filesystem logo map"""
+    global _FILESYSTEM_LOGO_MAP
+    if _FILESYSTEM_LOGO_MAP is None:
+        _FILESYSTEM_LOGO_MAP = _build_filesystem_logo_map()
+    return _FILESYSTEM_LOGO_MAP
+
+def team_logo(team_name: str) -> Optional[str]:
+    """Get team logo path - prioritize JSON mapping over filesystem scanning"""
+    if not team_name:
+        return str(DEFAULT_TEAM_LOGO) if DEFAULT_TEAM_LOGO.exists() else None
     
-    def __init__(self, team_logos_file: str = "team_logos.json",
-                 league_logos_file: str = "league_logos.json", 
-                 sponsor_logos_file: str = "sponsor_logos.json"):
-        """Initialize the logo resolver with JSON configuration files"""
-        self.team_logos = self._load_json(team_logos_file)
-        self.league_logos = self._load_json(league_logos_file)
-        self.sponsor_logos = self._load_json(sponsor_logos_file)
-        
-        # Build normalized lookup maps
-        self._build_lookup_maps()
+    log.debug(f"Looking for team logo: '{team_name}'")
     
-    def _load_json(self, filepath: str) -> Dict:
-        """Load a JSON configuration file"""
-        if not os.path.exists(filepath):
-            log.warning(f"Logo configuration file not found: {filepath}")
-            return {}
-        
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                log.info(f"Loaded {len(data)} entries from {filepath}")
-                return data
-        except Exception as e:
-            log.error(f"Error loading {filepath}: {e}")
-            return {}
-    
-    def _build_lookup_maps(self):
-        """Build normalized lookup maps for faster matching"""
-        self.team_lookup = {}
-        self.league_lookup = {}
-        self.sponsor_lookup = {}
-        
-        # Build team lookup with variations
-        for team_name, logo_path in self.team_logos.items():
-            normalized = normalize_name(team_name)
-            self.team_lookup[normalized] = logo_path
+    # 1. PRIORITIZE JSON mapping - use exact team names as keys
+    try:
+        data = _load_json(Path(TEAM_LOGOS_FILE))
+        if data:
+            # Direct exact match first
+            if team_name in data:
+                json_path = data[team_name]
+                if Path(json_path).exists():
+                    log.info(f"JSON exact match: '{team_name}' -> {json_path}")
+                    return str(Path(json_path))
             
-            # Add slug version
-            slug = create_slug(team_name)
-            if slug != normalized:
-                self.team_lookup[slug] = logo_path
+            # Handle hierarchical structure if present
+            if not all(isinstance(v, str) for v in data.values()):
+                league_id = os.getenv("LEAGUE_ID", "")
+                league_name = os.getenv("LEAGUE_DISPLAY_NAME") or os.getenv("LEAGUE_NAME", "")
+                
+                # Check default section
+                default_map = data.get("default", {})
+                if isinstance(default_map, dict) and team_name in default_map:
+                    json_path = default_map[team_name]
+                    if Path(json_path).exists():
+                        log.info(f"JSON default match: '{team_name}' -> {json_path}")
+                        return str(Path(json_path))
+                
+                # Check league-specific sections
+                leagues = data.get("leagues", {})
+                if isinstance(leagues, dict):
+                    if league_id and league_id in leagues:
+                        league_data = leagues[league_id]
+                        if isinstance(league_data, dict) and team_name in league_data:
+                            json_path = league_data[team_name]
+                            if Path(json_path).exists():
+                                log.info(f"JSON league ID match: '{team_name}' -> {json_path}")
+                                return str(Path(json_path))
+                    
+                    if league_name and league_name in leagues:
+                        league_data = leagues[league_name]
+                        if isinstance(league_data, dict) and team_name in league_data:
+                            json_path = league_data[team_name]
+                            if Path(json_path).exists():
+                                log.info(f"JSON league name match: '{team_name}' -> {json_path}")
+                                return str(Path(json_path))
             
-            # Add version without spaces
-            no_space = normalized.replace(' ', '')
-            if no_space != normalized:
-                self.team_lookup[no_space] = logo_path
-        
-        # Build league lookup
-        for league_name, logo_path in self.league_logos.items():
-            normalized = normalize_name(league_name)
-            self.league_lookup[normalized] = logo_path
-            self.league_lookup[create_slug(league_name)] = logo_path
-        
-        # Build sponsor lookup
-        for sponsor_name, logo_path in self.sponsor_logos.items():
-            normalized = normalize_name(sponsor_name)
-            self.sponsor_lookup[normalized] = logo_path
-            self.sponsor_lookup[create_slug(sponsor_name)] = logo_path
+    except Exception as e:
+        log.warning(f"JSON lookup failed for '{team_name}': {e}")
     
-    def resolve_team_logo(self, team_name: str) -> Optional[str]:
-        """Resolve a team logo path"""
-        if not team_name:
-            return None
-        
-        # First try direct lookup in JSON
-        if team_name in self.team_logos:
-            path = self.team_logos[team_name]
-            if os.path.exists(path):
-                log.info(f"Found team logo from JSON: {path}")
-                return path
-        
-        # Try normalized lookup
-        normalized = normalize_name(team_name)
-        if normalized in self.team_lookup:
-            path = self.team_lookup[normalized]
-            if os.path.exists(path):
-                log.info(f"Found team logo from normalized lookup: {path}")
-                return path
-        
-        # Try filesystem search
-        return find_logo_file(team_name, "team")
+    # 2. Fallback to filesystem scanning (only if JSON fails)
+    log.debug(f"JSON lookup failed, trying filesystem for: '{team_name}'")
+    filesystem_map = _get_filesystem_logo_map()
+    logo_path = _fuzzy_match_logo(team_name, filesystem_map)
+    if logo_path and Path(logo_path).exists():
+        log.info(f"Filesystem fallback match: '{team_name}' -> {logo_path}")
+        return logo_path
     
-    def resolve_league_logo(self, league_name: str) -> Optional[str]:
-        """Resolve a league logo path"""
-        if not league_name:
-            return None
-        
-        # Special case for common league names
-        if "browns" in league_name.lower() or "brownseakc" in league_name.lower():
-            # Direct path to your league logo
-            special_path = "./logos/team_logos/brownseakc.png"
-            if os.path.exists(special_path):
-                log.info(f"Found league logo via special case: {special_path}")
-                return special_path
-        
-        # Try JSON lookup first
-        if league_name in self.league_logos:
-            path = self.league_logos[league_name]
-            if os.path.exists(path):
-                log.info(f"Found league logo from JSON: {path}")
-                return path
-        
-        # Try normalized lookup
-        normalized = normalize_name(league_name)
-        if normalized in self.league_lookup:
-            path = self.league_lookup[normalized]
-            if os.path.exists(path):
-                log.info(f"Found league logo from normalized lookup: {path}")
-                return path
-        
-        # Try filesystem search
-        return find_logo_file(league_name, "league")
+    # 3. Default fallback
+    if DEFAULT_TEAM_LOGO.exists():
+        log.warning(f"Using default logo for: '{team_name}'")
+        return str(DEFAULT_TEAM_LOGO)
     
-    def resolve_sponsor_logo(self, sponsor_name: str) -> Optional[str]:
-        """Resolve a sponsor logo path"""
-        if not sponsor_name:
-            return None
-        
-        # Try JSON lookup first
-        if sponsor_name in self.sponsor_logos:
-            path = self.sponsor_logos[sponsor_name]
-            if os.path.exists(path):
-                log.info(f"Found sponsor logo from JSON: {path}")
-                return path
-        
-        # Try normalized lookup
-        normalized = normalize_name(sponsor_name)
-        if normalized in self.sponsor_lookup:
-            path = self.sponsor_lookup[normalized]
-            if os.path.exists(path):
-                log.info(f"Found sponsor logo from normalized lookup: {path}")
-                return path
-        
-        # Try filesystem search
-        return find_logo_file(sponsor_name, "sponsor")
-    
-    def resolve_any_logo(self, name: str) -> Optional[str]:
-        """Try to resolve a logo of any type"""
-        # Try team first (most common)
-        logo = self.resolve_team_logo(name)
-        if logo:
-            return logo
-        
-        # Try league
-        logo = self.resolve_league_logo(name)
-        if logo:
-            return logo
-        
-        # Try sponsor
-        logo = self.resolve_sponsor_logo(name)
-        if logo:
-            return logo
-        
-        # Last resort: general search
-        return find_logo_file(name, "any")
-    
-    def batch_resolve_team_logos(self, team_names: list) -> Dict[str, Optional[str]]:
-        """Resolve multiple team logos at once"""
-        results = {}
-        for name in team_names:
-            results[name] = self.resolve_team_logo(name)
-        return results
+    log.error(f"No logo found for team: '{team_name}'")
+    return None
 
-# ================= Standalone Functions =================
-
-def resolve_logo(name: str, logo_type: str = "team", 
-                json_configs: Dict[str, str] = None) -> Optional[str]:
-    """
-    Standalone function to resolve a logo
+def league_logo(name: Optional[str] = None) -> Optional[str]:
+    """Get league logo path"""
+    league_name = name or os.getenv("LEAGUE_DISPLAY_NAME") or os.getenv("LEAGUE_NAME") or ""
     
-    Args:
-        name: Name to search for
-        logo_type: Type of logo ('team', 'league', 'sponsor', 'any')
-        json_configs: Optional dict with paths to JSON config files
-    
-    Returns:
-        Path to logo file or None
-    """
-    if json_configs:
-        resolver = LogoResolver(
-            team_logos_file=json_configs.get('team', 'team_logos.json'),
-            league_logos_file=json_configs.get('league', 'league_logos.json'),
-            sponsor_logos_file=json_configs.get('sponsor', 'sponsor_logos.json')
-        )
-    else:
-        resolver = LogoResolver()
-    
-    if logo_type == "team":
-        return resolver.resolve_team_logo(name)
-    elif logo_type == "league":
-        return resolver.resolve_league_logo(name)
-    elif logo_type == "sponsor":
-        return resolver.resolve_sponsor_logo(name)
-    else:
-        return resolver.resolve_any_logo(name)
-
-# ================= Testing Interface =================
-
-def test_logo_resolution():
-    """Test logo resolution with various inputs"""
-    print("Testing Logo Resolution")
-    print("=" * 50)
-    
-    resolver = LogoResolver()
-    
-    test_cases = [
-        ("Thunder Hawks", "team"),
-        ("Lightning Bolts", "team"),
-        ("BrownsEAKC", "league"),
-        ("browns", "league"),
-        ("ESPN Fantasy", "sponsor"),
-        ("Gridiron Gazette", "sponsor"),
+    # Check for brownseakc.png specifically
+    possible_paths = [
+        Path("./logos/team_logos/brownseakc.png"),
+        Path("logos/team_logos/brownseakc.png"),
+        Path("logos/league_logos/brownseakc.png"),
+        Path("logos/brownseakc.png"),
     ]
     
-    for name, logo_type in test_cases:
-        print(f"\nSearching for {logo_type} logo: '{name}'")
-        
-        if logo_type == "team":
-            result = resolver.resolve_team_logo(name)
-        elif logo_type == "league":
-            result = resolver.resolve_league_logo(name)
-        elif logo_type == "sponsor":
-            result = resolver.resolve_sponsor_logo(name)
-        else:
-            result = resolver.resolve_any_logo(name)
-        
-        if result:
-            print(f"  ✅ Found: {result}")
-        else:
-            print(f"  ❌ Not found")
+    for path in possible_paths:
+        if path.exists():
+            log.debug(f"Found league logo: {path}")
+            return str(path)
     
-    print("\n" + "=" * 50)
-    print("Checking special league logo...")
-    
-    # Check for the specific brownseakc.png
-    special_check = "./logos/team_logos/brownseakc.png"
-    if os.path.exists(special_check):
-        print(f"✅ brownseakc.png exists at: {special_check}")
-    else:
-        print(f"❌ brownseakc.png not found at: {special_check}")
+    # Fallback to JSON mapping
+    return _find_brand_logo(league_name, LEAGUE_LOGOS_FILE, DEFAULT_LEAGUE_DIR)
 
-def scan_logo_directory():
-    """Scan and report all logos found in the system"""
-    print("Scanning for all logo files")
-    print("=" * 50)
-    
-    logos_found = {
-        'team': [],
-        'league': [],
-        'sponsor': [],
-        'other': []
-    }
-    
-    for directory in DEFAULT_LOGO_DIRS:
-        if not os.path.exists(directory):
-            continue
-        
-        print(f"\nScanning {directory}...")
-        
-        try:
-            for filename in os.listdir(directory):
-                if any(filename.lower().endswith(ext) for ext in IMAGE_EXTENSIONS):
-                    filepath = os.path.join(directory, filename)
-                    
-                    # Categorize
-                    if 'team' in directory.lower():
-                        logos_found['team'].append(filepath)
-                    elif 'league' in directory.lower():
-                        logos_found['league'].append(filepath)
-                    elif 'sponsor' in directory.lower():
-                        logos_found['sponsor'].append(filepath)
-                    else:
-                        logos_found['other'].append(filepath)
-                    
-                    print(f"  Found: {filename}")
-        except Exception as e:
-            print(f"  Error scanning: {e}")
-    
-    print("\n" + "=" * 50)
-    print("Summary:")
-    for category, files in logos_found.items():
-        print(f"  {category.capitalize()} logos: {len(files)}")
+def sponsor_logo(name: Optional[str] = None) -> Optional[str]:
+    """Get sponsor logo path"""
+    sponsor_name = name or os.getenv("SPONSOR_NAME") or "Gridiron Gazette"
+    return _find_brand_logo(sponsor_name, SPONSOR_LOGOS_FILE, DEFAULT_SPONSOR_DIR)
 
-if __name__ == "__main__":
-    import sys
+def _find_brand_logo(display_name: str, json_file: str, default_dir: Path) -> Optional[str]:
+    """Find brand logo with priority: JSON -> directory scan -> None"""
+    if not display_name:
+        return None
+        
+    nm = display_name.strip()
+    slug = _norm(nm)
+    mapping = _load_json(Path(json_file))
+
+    log.debug(f"Looking for brand logo: '{nm}' -> '{slug}'")
+
+    # 1. Direct key match in JSON
+    if nm in mapping:
+        rel = mapping[nm]
+        if isinstance(rel, str) and Path(rel).exists():
+            log.debug(f"Brand exact match: {nm} -> {rel}")
+            return str(Path(rel))
+
+    # 2. Fuzzy match in JSON
+    for k, v in mapping.items():
+        if _norm(k) == slug and isinstance(v, str) and Path(v).exists():
+            log.debug(f"Brand fuzzy match: {nm} -> {v}")
+            return str(Path(v))
+
+    # 3. Scan default directory
+    if default_dir.exists():
+        exts = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]
+        for p in default_dir.glob("*.*"):
+            if p.is_file() and p.suffix.lower() in exts:
+                if _norm(p.stem) == slug:
+                    log.debug(f"Brand directory match: {nm} -> {p}")
+                    return str(p)
+
+    log.debug(f"No brand logo found for: {nm}")
+    return None
+
+# --- Image sanitation for docx ---
+try:
+    from PIL import Image, UnidentifiedImageError
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+    log.warning("PIL not available - logo sanitation disabled")
+
+_CACHE_DIR = Path("logos/_cache")
+_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+def _sanitize_for_docx(img_path: str | Path) -> Optional[str]:
+    """
+    Open the image with Pillow and re-save as a proper PNG copy in logos/_cache.
+    Returns path to sanitized PNG or None if it fails.
+    """
+    if not PIL_AVAILABLE:
+        # If PIL not available, just return original path if it exists
+        p = Path(img_path)
+        return str(p) if p.exists() and p.is_file() else None
     
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "test":
-            test_logo_resolution()
-        elif sys.argv[1] == "scan":
-            scan_logo_directory()
-        elif sys.argv[1] == "find" and len(sys.argv) > 2:
-            name = " ".join(sys.argv[2:])
-            print(f"Searching for logo: '{name}'")
+    try:
+        p = Path(img_path)
+        if not p.exists() or not p.is_file():
+            return None
             
-            resolver = LogoResolver()
-            result = resolver.resolve_any_logo(name)
-            
-            if result:
-                print(f"✅ Found: {result}")
-            else:
-                print(f"❌ Not found")
-                print("\nTrying filesystem search...")
-                result = find_logo_file(name, "any")
-                if result:
-                    print(f"✅ Found via filesystem: {result}")
+        out = _CACHE_DIR / (p.stem + ".png")
+        
+        # Skip if already sanitized and newer
+        if out.exists() and out.stat().st_mtime >= p.stat().st_mtime:
+            return str(out)
+        
+        with Image.open(p) as im:
+            # Convert to compatible mode
+            if im.mode not in ("RGB", "RGBA"):
+                if "transparency" in im.info or im.mode == "P":
+                    im = im.convert("RGBA")
                 else:
-                    print(f"❌ Still not found")
-    else:
-        print("Logo Resolver Utility")
-        print("Usage:")
-        print("  python logo_resolver.py test        - Test resolution with sample names")
-        print("  python logo_resolver.py scan        - Scan all logo directories")
-        print("  python logo_resolver.py find [name] - Find a specific logo")
+                    im = im.convert("RGB")
+            
+            # Save as PNG
+            im.save(out, format="PNG", optimize=True)
+            log.debug(f"Sanitized logo: {p} -> {out}")
+            
+        return str(out)
+        
+    except Exception as e:
+        log.warning(f"Failed to sanitize image {img_path}: {e}")
+        # Return original if sanitization fails
+        p = Path(img_path)
+        return str(p) if p.exists() else None
+
+def sanitize_logo_for_docx(path_str: Optional[str]) -> Optional[str]:
+    """Sanitize logo for docx with error handling"""
+    if not path_str:
+        return None
+    return _sanitize_for_docx(path_str)

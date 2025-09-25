@@ -1,334 +1,450 @@
-"""
-Weekly Recap Builder for Gridiron Gazette
-Generates the final DOCX output with all data, logos, and Sabre's commentary
-"""
-
-import os
+from __future__ import annotations
 import logging
-from typing import Dict, Any, Optional
-from datetime import datetime
-from docxtpl import DocxTemplate
+from pathlib import Path
+from typing import Any, Dict
 
-# Import our modules
-from storymaker import generate_sabre_blurbs, generate_spotlight_content, clean_markdown_for_docx
-from logo_resolver import LogoResolver
+from docxtpl import DocxTemplate, InlineImage
+from docx.shared import Mm
+
+from gazette_data import build_context
+import logo_resolver as logos
 
 log = logging.getLogger("weekly_recap")
 
-# ================= Configuration =================
+# --- Optional Sabre blurbs (storymaker) ---
+try:
+    from storymaker import generate_spotlights_for_week
+    log.info("Storymaker imported successfully")
+except Exception as e:
+    log.warning(f"Failed to import storymaker: {e}")
+    def generate_spotlights_for_week(ctx: Dict[str, Any], style: str, words: int) -> Dict[str, Dict[str, str]]:
+        log.info("Using fallback spotlight generator")
+        out: Dict[str, Dict[str, str]] = {}
+        for i in range(1, 8):
+            h = ctx.get(f"MATCHUP{i}_HOME")
+            a = ctx.get(f"MATCHUP{i}_AWAY")
+            if not (h and a):
+                continue
+            hs = ctx.get(f"MATCHUP{i}_HS", "")
+            as_ = ctx.get(f"MATCHUP{i}_AS", "")
+            hts = ctx.get(f"MATCHUP{i}_HOME_TOP_SCORER", "")
+            htp = ctx.get(f"MATCHUP{i}_HOME_TOP_POINTS", "")
+            ats = ctx.get(f"MATCHUP{i}_AWAY_TOP_SCORER", "")
+            atp = ctx.get(f"MATCHUP{i}_AWAY_TOP_POINTS", "")
+            
+            out[str(i)] = {
+                "home": f"Top Scorer (Home): {hts} {f'({htp})' if htp else ''}".strip() if hts else "Top Scorer (Home): —",
+                "away": f"Top Scorer (Away): {ats} {f'({atp})' if atp else ''}".strip() if ats else "Top Scorer (Away): —",
+                "bust": "Biggest Bust: Performance below expectations",
+                "key": f"Key Play: {h} {hs} vs {a} {as_}" if h and a else "Key Play: —",
+                "def": "Defense Note: Solid defensive showing",
+            }
+        return out
 
-DEFAULT_TEMPLATE = "recap_template.docx"
-DEFAULT_OUTPUT_DIR = "./output"
 
-# ================= Context Enhancement =================
-
-def enhance_context_with_blurbs(context: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Add Sabre blurbs and spotlight content to the context
-    """
-    log.info("Enhancing context with Sabre blurbs...")
+def _generate_sabre_blurbs(ctx: Dict[str, Any], style: str, words: int) -> Dict[str, str]:
+    """Generate Sabre's news article blurbs for each matchup"""
+    log.info(f"Generating Sabre blurbs - style: {style}, words: {words}")
     
-    # Generate main Sabre blurbs for each matchup
     try:
-        blurbs = generate_sabre_blurbs(context)
+        from storymaker import generate_spotlights_for_week
         
-        # Add blurbs to context with proper keys
-        for matchup_num, blurb_text in blurbs.items():
-            # Clean markdown from the blurb
-            clean_blurb = clean_markdown_for_docx(blurb_text)
-            
-            # Add as both numbered and matchup-specific keys
-            context[f"blurb_{matchup_num}"] = clean_blurb
-            context[f"MATCHUP{matchup_num}_BLURB"] = clean_blurb
-            
-            log.info(f"Added blurb for matchup {matchup_num}")
-    except Exception as e:
-        log.error(f"Error generating Sabre blurbs: {e}")
-    
-    # Generate spotlight content (TOP_HOME, TOP_AWAY, etc.)
-    try:
-        spotlights = generate_spotlight_content(context)
+        # Generate spotlight content first
+        spotlights = generate_spotlights_for_week(ctx, style=style, words=words)
         
-        for key, value in spotlights.items():
-            # Clean markdown from spotlight content
-            clean_value = clean_markdown_for_docx(value)
-            context[key] = clean_value
+        # Convert spotlights into full Sabre blurbs (news articles)
+        blurbs = {}
+        
+        for i in range(1, 8):
+            home_name = ctx.get(f"MATCHUP{i}_HOME", "")
+            away_name = ctx.get(f"MATCHUP{i}_AWAY", "")
+            home_score = ctx.get(f"MATCHUP{i}_HS", "")
+            away_score = ctx.get(f"MATCHUP{i}_AS", "")
             
-            log.info(f"Added spotlight: {key}")
-    except Exception as e:
-        log.error(f"Error generating spotlight content: {e}")
-    
-    return context
+            if not (home_name and away_name):
+                continue
+                
+            # Get spotlight details
+            spotlight = spotlights.get(str(i), {})
+            
+            # Create a full Sabre news blurb
+            winner = home_name if float(home_score or 0) >= float(away_score or 0) else away_name
+            loser = away_name if float(home_score or 0) >= float(away_score or 0) else home_name
+            margin = abs(float(home_score or 0) - float(away_score or 0))
+            
+            blurb = f"""
+{winner} edged out {loser} {home_score}-{away_score} in what can only be described as {'a nail-biter' if margin < 5 else 'a decisive victory' if margin > 20 else 'a solid win'}.
 
-def add_logos_to_context(context: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Resolve and add all logo paths to the context
-    """
-    log.info("Resolving logos...")
+{spotlight.get('home', 'The home team put up a fight.')} Meanwhile, {spotlight.get('away', 'the away team showed resilience.')  }
+
+{spotlight.get('bust', 'Some players had better days than others.')} {spotlight.get('key', 'The game had its moments.')}
+
+{spotlight.get('def', 'Defense played its part in the outcome.')}
+
+— Sabre, Gridiron Gazette
+            """.strip()
+            
+            blurbs[str(i)] = blurb
+            
+        log.info(f"Generated {len(blurbs)} Sabre blurbs")
+        return blurbs
+        
+    except Exception as e:
+        log.error(f"Failed to generate Sabre blurbs: {e}")
+        return {}
+
+
+def _inject_exact_template_variables(ctx: Dict[str, Any], style: str, words: int) -> None:
+    """Generate exact template variables + add blurb variables"""
+    log.info(f"Generating EXACT template variables + blurbs - style: {style}, words: {words}")
     
-    resolver = LogoResolver()
+    try:
+        blocks = generate_spotlights_for_week(ctx, style=style, words=words)
+        log.info(f"Generated spotlights for {len(blocks)} matchups")
+    except Exception as e:
+        log.error(f"Failed to generate spotlights: {e}")
+        blocks = {}
     
-    # Resolve team logos for each matchup
+    # Generate Sabre blurbs (news articles)
+    sabre_blurbs = _generate_sabre_blurbs(ctx, style, words)
+    
+    # Generate the EXACT variable patterns the template expects
+    for i in range(1, 8):
+        # Get existing matchup data
+        home_name = ctx.get(f"MATCHUP{i}_HOME", "")
+        away_name = ctx.get(f"MATCHUP{i}_AWAY", "")
+        home_score = ctx.get(f"MATCHUP{i}_HS", "")
+        away_score = ctx.get(f"MATCHUP{i}_AS", "")
+        home_top_scorer = ctx.get(f"MATCHUP{i}_HOME_TOP_SCORER", "")
+        home_top_points = ctx.get(f"MATCHUP{i}_HOME_TOP_POINTS", "")
+        away_top_scorer = ctx.get(f"MATCHUP{i}_AWAY_TOP_SCORER", "")
+        away_top_points = ctx.get(f"MATCHUP{i}_AWAY_TOP_POINTS", "")
+        
+        if not (home_name and away_name):
+            continue
+            
+        # Get spotlight content for this matchup
+        block = blocks.get(str(i), {})
+        
+        # EXACT TEMPLATE VARIABLE NAMES from template inspector:
+        
+        # Top scorers - template expects MATCHUP1_TOP_HOME format
+        home_top_display = f"{home_top_scorer} ({home_top_points})" if home_top_scorer and home_top_points else ""
+        away_top_display = f"{away_top_scorer} ({away_top_points})" if away_top_scorer and away_top_points else ""
+        
+        ctx[f"MATCHUP{i}_TOP_HOME"] = home_top_display
+        ctx[f"MATCHUP{i}_TOP_AWAY"] = away_top_display
+        
+        # Spotlight content - template expects MATCHUP1_BUST, MATCHUP1_DEF, MATCHUP1_KEYPLAY
+        ctx[f"MATCHUP{i}_BUST"] = block.get("bust", "")
+        ctx[f"MATCHUP{i}_DEF"] = block.get("def", "")
+        ctx[f"MATCHUP{i}_KEYPLAY"] = block.get("key", "")
+        
+        # ADD ALL POSSIBLE BLURB VARIABLE PATTERNS
+        sabre_blurb = sabre_blurbs.get(str(i), "")
+        if sabre_blurb:
+            # Multiple possible blurb variable patterns
+            blurb_patterns = [
+                f"MATCHUP{i}_BLURB",
+                f"MATCHUP{i}.blurb", 
+                f"matchup{i}.blurb",
+                f"BLURB{i}",
+                f"SABRE_BLURB_{i}",
+                f"ARTICLE{i}",
+                f"STORY{i}",
+                f"NEWS{i}",
+            ]
+            
+            for pattern in blurb_patterns:
+                ctx[pattern] = sabre_blurb
+        
+        # Log what we're setting for debugging
+        if i <= 2:  # Log first 2 for brevity
+            log.info(f"Setting MATCHUP{i} variables:")
+            log.info(f"  MATCHUP{i}_TOP_HOME = '{home_top_display}'")
+            log.info(f"  MATCHUP{i}_TOP_AWAY = '{away_top_display}'")
+            log.info(f"  MATCHUP{i}_BUST = '{block.get('bust', '')[:30]}...'")
+            if sabre_blurb:
+                log.info(f"  MATCHUP{i}_BLURB = '{sabre_blurb[:50]}...'")
+
+    # Count variables for verification
+    template_vars = len([k for k in ctx.keys() if any(x in k for x in ["_TOP_", "_BUST", "_DEF", "_KEYPLAY", "_BLURB"])])
+    log.info(f"Set {template_vars} template-specific variables")
+
+
+def _make_basic_aliases(ctx: Dict[str, Any]) -> None:
+    """Create essential aliases"""
+    week = ctx.get("WEEK_NUMBER")
+    league = ctx.get("LEAGUE_NAME") or "League"
+    
+    # Basic template requirements
+    ctx.setdefault("title", f"Week {week} Fantasy Football Gazette")
+    ctx.setdefault("TITLE", f"Week {week} Fantasy Football Gazette — {league}")
+    ctx.setdefault("SUBTITLE", "For those times when everyone wants to know your score.")
+
+
+def _fix_league_logo_resolution(ctx: Dict[str, Any]) -> None:
+    """Fix league logo resolution - ensure brownseakc.png is found"""
+    league_name = ctx.get("LEAGUE_NAME", "")
+    
+    log.info(f"Fixing league logo resolution for: '{league_name}'")
+    
+    # Direct path check for the logo you mentioned
+    direct_logo_path = Path("logos/team_logos/brownseakc.png")
+    if direct_logo_path.exists():
+        log.info(f"Found direct league logo: {direct_logo_path}")
+        # Set it directly since we know where it is
+        ctx["_LEAGUE_LOGO_PATH"] = str(direct_logo_path)
+        return
+    
+    # Check other possible locations
+    possible_paths = [
+        Path("logos/team_logos/brownseakc.png"),
+        Path("logos/league_logos/brownseakc.png"), 
+        Path("logos/brownseakc.png"),
+        Path("./logos/team_logos/brownseakc.png"),
+    ]
+    
+    for path in possible_paths:
+        if path.exists():
+            log.info(f"Found league logo at: {path}")
+            ctx["_LEAGUE_LOGO_PATH"] = str(path)
+            return
+            
+    log.warning(f"Could not find brownseakc.png in any expected location")
+
+
+def _attach_images(ctx: Dict[str, Any], doc: DocxTemplate) -> None:
+    """Attach all logos with comprehensive debugging"""
+    import logo_resolver as logos
+    
+    log.info("=" * 50)
+    log.info("LOGO ATTACHMENT DEBUG")
+    log.info("=" * 50)
+    
+    # League logo
+    try:
+        league_name = str(ctx.get("LEAGUE_NAME", ""))
+        log.info(f"Looking for league logo for: '{league_name}'")
+        
+        lg_raw = logos.league_logo(league_name)
+        log.info(f"League logo resolver returned: {lg_raw}")
+        
+        if lg_raw:
+            lg = logos.sanitize_logo_for_docx(lg_raw)
+            log.info(f"Sanitized league logo: {lg}")
+            
+            if lg and Path(lg).exists():
+                ctx["LEAGUE_LOGO"] = InlineImage(doc, lg, width=Mm(25))
+                log.info("✅ League logo attached successfully")
+            else:
+                log.error(f"❌ Sanitized league logo doesn't exist: {lg}")
+        else:
+            log.error("❌ No raw league logo found")
+    except Exception as e:
+        log.error(f"❌ League logo error: {e}")
+
+    # Sponsor logo
+    try:
+        sponsor_name = str(ctx.get("SPONSOR_NAME", "Gridiron Gazette"))
+        log.info(f"Looking for sponsor logo for: '{sponsor_name}'")
+        
+        sp_raw = logos.sponsor_logo(sponsor_name)
+        log.info(f"Sponsor logo resolver returned: {sp_raw}")
+        
+        if sp_raw:
+            sp = logos.sanitize_logo_for_docx(sp_raw)
+            log.info(f"Sanitized sponsor logo: {sp}")
+            
+            if sp and Path(sp).exists():
+                ctx["SPONSOR_LOGO"] = InlineImage(doc, sp, width=Mm(25))
+                log.info("✅ Sponsor logo attached successfully")
+            else:
+                log.error(f"❌ Sanitized sponsor logo doesn't exist: {sp}")
+        else:
+            log.error("❌ No raw sponsor logo found")
+    except Exception as e:
+        log.error(f"❌ Sponsor logo error: {e}")
+
+    # Team logos - this is the critical part
+    log.info("TEAM LOGOS:")
+    log.info("-" * 30)
+    
     for i in range(1, 8):
         home_key = f"MATCHUP{i}_HOME"
         away_key = f"MATCHUP{i}_AWAY"
         
-        if home_key in context:
-            home_team = context[home_key]
-            home_logo = resolver.resolve_team_logo(home_team)
-            if home_logo:
-                context[f"MATCHUP{i}_HOME_LOGO"] = home_logo
-                log.info(f"Found logo for {home_team}: {home_logo}")
+        home_name = ctx.get(home_key, "")
+        away_name = ctx.get(away_key, "")
         
-        if away_key in context:
-            away_team = context[away_key]
-            away_logo = resolver.resolve_team_logo(away_team)
-            if away_logo:
-                context[f"MATCHUP{i}_AWAY_LOGO"] = away_logo
-                log.info(f"Found logo for {away_team}: {away_logo}")
+        if not (home_name and away_name):
+            log.info(f"MATCHUP{i}: No teams found")
+            continue
+            
+        log.info(f"MATCHUP{i}: '{home_name}' vs '{away_name}'")
+        
+        # HOME TEAM LOGO
+        try:
+            log.info(f"  Looking for HOME logo: '{home_name}'")
+            home_logo_raw = logos.team_logo(home_name)
+            log.info(f"  Home logo resolver returned: {home_logo_raw}")
+            
+            if home_logo_raw:
+                home_logo = logos.sanitize_logo_for_docx(home_logo_raw)
+                log.info(f"  Sanitized home logo: {home_logo}")
+                
+                if home_logo and Path(home_logo).exists():
+                    home_inline = InlineImage(doc, home_logo, width=Mm(22))
+                    ctx[f"MATCHUP{i}_HOME_LOGO"] = home_inline
+                    log.info(f"  ✅ HOME logo attached: MATCHUP{i}_HOME_LOGO")
+                else:
+                    log.error(f"  ❌ Sanitized home logo doesn't exist: {home_logo}")
+            else:
+                log.error(f"  ❌ No raw home logo found for: '{home_name}'")
+        except Exception as e:
+            log.error(f"  ❌ Home logo error for '{home_name}': {e}")
+        
+        # AWAY TEAM LOGO  
+        try:
+            log.info(f"  Looking for AWAY logo: '{away_name}'")
+            away_logo_raw = logos.team_logo(away_name)
+            log.info(f"  Away logo resolver returned: {away_logo_raw}")
+            
+            if away_logo_raw:
+                away_logo = logos.sanitize_logo_for_docx(away_logo_raw)
+                log.info(f"  Sanitized away logo: {away_logo}")
+                
+                if away_logo and Path(away_logo).exists():
+                    away_inline = InlineImage(doc, away_logo, width=Mm(22))
+                    ctx[f"MATCHUP{i}_AWAY_LOGO"] = away_inline
+                    log.info(f"  ✅ AWAY logo attached: MATCHUP{i}_AWAY_LOGO")
+                else:
+                    log.error(f"  ❌ Sanitized away logo doesn't exist: {away_logo}")
+            else:
+                log.error(f"  ❌ No raw away logo found for: '{away_name}'")
+        except Exception as e:
+            log.error(f"  ❌ Away logo error for '{away_name}': {e}")
     
-    # Resolve league logo
-    league_name = context.get("LEAGUE_NAME", "")
-    
-    # Special handling for Browns league
-    if "browns" in league_name.lower() or not league_name:
-        # Direct path to brownseakc.png
-        special_path = "./logos/team_logos/brownseakc.png"
-        if os.path.exists(special_path):
-            context["LEAGUE_LOGO"] = special_path
-            log.info(f"Using Browns league logo: {special_path}")
-        else:
-            log.warning(f"Browns logo not found at: {special_path}")
-    else:
-        league_logo = resolver.resolve_league_logo(league_name)
-        if league_logo:
-            context["LEAGUE_LOGO"] = league_logo
-            log.info(f"Found league logo: {league_logo}")
-    
-    # Resolve sponsor logo
-    sponsor_name = context.get("SPONSOR_NAME", "Gridiron Gazette")
-    sponsor_logo = resolver.resolve_sponsor_logo(sponsor_name)
-    if sponsor_logo:
-        context["SPONSOR_LOGO"] = sponsor_logo
-        log.info(f"Found sponsor logo: {sponsor_logo}")
-    
-    return context
+    # Summary
+    logo_vars = [k for k in ctx.keys() if "LOGO" in k]
+    log.info("=" * 50)
+    log.info(f"FINAL LOGO VARIABLES: {len(logo_vars)}")
+    for var in logo_vars:
+        log.info(f"  {var}: {'✅ InlineImage' if hasattr(ctx[var], 'width') else '❌ Not InlineImage'}")
+    log.info("=" * 50)
 
-def add_awards_to_context(context: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Format awards for the template
-    """
-    log.info("Formatting awards...")
+def render_docx(template_path: str, outdocx: str, context: Dict[str, Any]) -> str:
+    """Render DOCX with exact template variable matching + blurb support"""
+    log.info(f"Rendering DOCX from template: {template_path}")
+    log.info(f"Output path: {outdocx}")
     
-    # Cupcake Award (lowest score)
-    cupcake = context.get("CUPCAKE", "")
-    if cupcake:
-        cupcake_score = context.get("CUPCAKE_SCORE", "")
-        context["CUPCAKE_AWARD"] = f"{cupcake} ({cupcake_score} pts)" if cupcake_score else cupcake
-    else:
-        context["CUPCAKE_AWARD"] = "---"
-    
-    # Kitty Award (closest loss)
-    kitty = context.get("KITTY", "")
-    if kitty:
-        kitty_margin = context.get("KITTY_MARGIN", "")
-        context["KITTY_AWARD"] = f"{kitty} (lost by {kitty_margin} pts)" if kitty_margin else kitty
-    else:
-        context["KITTY_AWARD"] = "---"
-    
-    # Top Score Award
-    top_score = context.get("TOPSCORE", "")
-    if top_score:
-        top_score_pts = context.get("TOPSCORE_POINTS", "")
-        context["TOPSCORE_AWARD"] = f"{top_score} ({top_score_pts} pts)" if top_score_pts else top_score
-    else:
-        context["TOPSCORE_AWARD"] = "---"
-    
-    return context
-
-def validate_context(context: Dict[str, Any]) -> bool:
-    """
-    Validate that the context has required data
-    """
-    required_keys = [
-        "WEEK",
-        "YEAR", 
-        "MATCHUP1_HOME",
-        "MATCHUP1_AWAY",
-        "MATCHUP1_HS",
-        "MATCHUP1_AS"
-    ]
-    
-    missing = []
-    for key in required_keys:
-        if key not in context or not context[key]:
-            missing.append(key)
-    
-    if missing:
-        log.warning(f"Missing required context keys: {missing}")
-        return False
-    
-    return True
-
-# ================= Template Rendering =================
-
-def render_template(context: Dict[str, Any], 
-                    template_path: str = DEFAULT_TEMPLATE,
-                    output_path: str = None) -> str:
-    """
-    Render the DOCX template with the context data
-    
-    Returns:
-        Path to the generated file
-    """
-    if not os.path.exists(template_path):
+    if not Path(template_path).exists():
         raise FileNotFoundError(f"Template not found: {template_path}")
     
-    # Enhance context with all data
-    context = enhance_context_with_blurbs(context)
-    context = add_logos_to_context(context)
-    context = add_awards_to_context(context)
-    
-    # Validate context
-    if not validate_context(context):
-        log.warning("Context validation failed, but continuing...")
-    
-    # Generate output filename if not provided
-    if not output_path:
-        week = context.get("WEEK", "X")
-        year = context.get("YEAR", datetime.now().year)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_filename = f"Gazette_Week{week}_{year}_{timestamp}.docx"
-        
-        os.makedirs(DEFAULT_OUTPUT_DIR, exist_ok=True)
-        output_path = os.path.join(DEFAULT_OUTPUT_DIR, output_filename)
-    
-    # Render the template
     try:
         doc = DocxTemplate(template_path)
+        log.info("Template loaded successfully")
         
-        # Clean all text fields of markdown before rendering
-        for key, value in context.items():
-            if isinstance(value, str) and any(marker in str(value) for marker in ['**', '*', '__', '_', '`', '##']):
-                context[key] = clean_markdown_for_docx(value)
+        # Process context with comprehensive variable generation
+        log.info("Creating basic aliases...")
+        _make_basic_aliases(context)
         
+        log.info("Fixing league logo resolution...")
+        _fix_league_logo_resolution(context)
+        
+        log.info("Injecting EXACT template variables + blurbs...")
+        _inject_exact_template_variables(
+            context, 
+            style=context.get("BLURB_STYLE", "sabre"), 
+            words=int(context.get("BLURB_WORDS", 200))
+        )
+        
+        log.info("Attaching images...")
+        _attach_images(context, doc)
+        
+        # Log final variable summary
+        total_vars = len(context)
+        template_vars = len([k for k in context.keys() if any(x in k for x in ["_TOP_", "_BUST", "_DEF", "_KEYPLAY"])])
+        blurb_vars = len([k for k in context.keys() if "BLURB" in k])
+        
+        log.info(f"Final context: {total_vars} total vars, {template_vars} template vars, {blurb_vars} blurb vars")
+        
+        # Show key variables for verification
+        log.info("Key template variables:")
+        for i in range(1, min(3, 6)):  # Show first 2 matchups
+            if f"MATCHUP{i}_HOME" in context:
+                log.info(f"  MATCHUP{i}_TOP_HOME = '{context.get(f'MATCHUP{i}_TOP_HOME', 'NOT SET')}'")
+                log.info(f"  MATCHUP{i}_BLURB = '{context.get(f'MATCHUP{i}_BLURB', 'NOT SET')[:50]}...'")
+        
+        # Ensure output directory exists
+        Path(outdocx).parent.mkdir(parents=True, exist_ok=True)
+        
+        log.info("Rendering document...")
         doc.render(context)
-        doc.save(output_path)
         
-        log.info(f"✅ Generated recap: {output_path}")
-        return output_path
+        log.info("Saving document...")
+        doc.save(outdocx)
+        
+        log.info(f"Document rendered successfully: {outdocx}")
+        return outdocx
         
     except Exception as e:
-        log.error(f"Error rendering template: {e}")
+        log.error(f"Failed to render DOCX: {e}")
         raise
 
-# ================= Main Entry Point =================
 
-def build_recap(context: Dict[str, Any], 
-               template_path: str = DEFAULT_TEMPLATE,
-               output_path: str = None,
-               use_llm: bool = True) -> str:
-    """
-    Main entry point for building a weekly recap
-    
-    Args:
-        context: Data context from gazette_data
-        template_path: Path to DOCX template
-        output_path: Optional output path
-        use_llm: Whether to use OpenAI for blurbs (default True)
-    
-    Returns:
-        Path to generated file
-    """
-    log.info("="*60)
-    log.info(f"Building Weekly Recap for Week {context.get('WEEK', '?')}")
-    log.info("="*60)
-    
-    # Set flag for LLM usage
-    if not use_llm:
-        # Temporarily disable OpenAI
-        os.environ['DISABLE_OPENAI'] = 'true'
+def build_weekly_recap(
+    league: Any,
+    league_id: int,
+    year: int,
+    week: int,
+    template: str,
+    output_dir: str,
+    llm_blurbs: bool = True,
+    blurb_style: str = "sabre",
+    blurb_words: int = 200,
+) -> str:
+    """Build weekly recap with exact template matching + comprehensive blurb support"""
+    log.info(f"Building weekly recap - League: {league_id}, Year: {year}, Week: {week}")
+    log.info(f"Template: {template}")
+    log.info(f"LLM Blurbs: {llm_blurbs}, Style: {blurb_style}, Words: {blurb_words}")
     
     try:
-        output_file = render_template(context, template_path, output_path)
+        # Build context from ESPN data
+        ctx = build_context(league_id=league_id, year=year, week=week)
         
-        # Print summary
-        log.info("\n" + "="*60)
-        log.info("RECAP GENERATION COMPLETE")
-        log.info("="*60)
-        log.info(f"Week: {context.get('WEEK', '?')}")
-        log.info(f"Year: {context.get('YEAR', '?')}")
-        log.info(f"League: {context.get('LEAGUE_NAME', 'Unknown')}")
-        log.info(f"Output: {output_file}")
-        
-        # Report on what was included
-        has_blurbs = any(key.startswith("blurb_") for key in context)
-        has_spotlights = any("_TOP_" in key for key in context)
-        has_logos = any("_LOGO" in key for key in context)
-        
-        log.info("\nContent included:")
-        log.info(f"  ✅ Matchup scores: Yes")
-        log.info(f"  {'✅' if has_blurbs else '❌'} Sabre blurbs: {'Yes' if has_blurbs else 'No'}")
-        log.info(f"  {'✅' if has_spotlights else '❌'} Stats spotlights: {'Yes' if has_spotlights else 'No'}")
-        log.info(f"  {'✅' if has_logos else '❌'} Team logos: {'Yes' if has_logos else 'No'}")
-        
-        if context.get("LEAGUE_LOGO"):
-            log.info(f"  ✅ League logo: {context['LEAGUE_LOGO']}")
-        else:
-            log.info(f"  ❌ League logo: Not found")
-        
-        log.info("="*60)
-        
-        return output_file
-        
-    finally:
-        # Clean up temporary flag
-        if not use_llm and 'DISABLE_OPENAI' in os.environ:
-            del os.environ['DISABLE_OPENAI']
+        # Add blurb configuration
+        ctx.setdefault("BLURB_STYLE", blurb_style or "sabre")
+        ctx.setdefault("BLURB_WORDS", blurb_words or 200)
+        ctx.setdefault("LLM_BLURBS", llm_blurbs)
 
-# ================= Testing =================
+        # Process output path with token replacement
+        week_num = int(ctx.get("WEEK_NUMBER", week or 0) or 0)
+        league_name = ctx.get("LEAGUE_NAME", "League")
+        
+        out_path = output_dir
+        out_path = out_path.replace("{year}", str(ctx.get("YEAR", year)))
+        out_path = out_path.replace("{league}", str(league_name))
+        out_path = out_path.replace("{week}", str(week_num))
+        out_path = out_path.replace("{week02}", f"{week_num:02d}")
+        
+        # Ensure .docx extension
+        if not out_path.lower().endswith(".docx"):
+            out_path = str(Path(out_path) / f"gazette_week_{week_num}.docx")
 
-def test_with_sample_data():
-    """Test with sample data"""
-    sample_context = {
-        "WEEK": 3,
-        "YEAR": 2025,
-        "LEAGUE_NAME": "Browns Fantasy League",
+        log.info(f"Final output path: {out_path}")
         
-        # Sample matchup
-        "MATCHUP1_HOME": "Thunder Hawks",
-        "MATCHUP1_AWAY": "Lightning Bolts",
-        "MATCHUP1_HS": 125.50,
-        "MATCHUP1_AS": 98.75,
-        "MATCHUP1_HOME_TOP_SCORER": "Josh Allen",
-        "MATCHUP1_HOME_TOP_POINTS": 32.5,
-        "MATCHUP1_AWAY_TOP_SCORER": "Justin Jefferson", 
-        "MATCHUP1_AWAY_TOP_POINTS": 28.2,
+        # Log context summary
+        log.info(f"Context summary:")
+        log.info(f"  League: {ctx.get('LEAGUE_NAME')}")
+        log.info(f"  Week: {ctx.get('WEEK_NUMBER')}")
+        log.info(f"  Matchups: {ctx.get('MATCHUP_COUNT', 0)}")
         
-        # Awards
-        "CUPCAKE": "Team Disaster",
-        "CUPCAKE_SCORE": 65.3,
-        "KITTY": "Almost Winners",
-        "KITTY_MARGIN": 0.5,
-        "TOPSCORE": "Thunder Hawks",
-        "TOPSCORE_POINTS": 125.50
-    }
-    
-    print("Testing recap generation with sample data...")
-    
-    try:
-        output_file = build_recap(sample_context, use_llm=False)
-        print(f"✅ Test successful! Output: {output_file}")
+        # Render the document
+        result = render_docx(template, out_path, ctx)
+        log.info(f"Weekly recap completed successfully: {result}")
+        return result
+        
     except Exception as e:
-        print(f"❌ Test failed: {e}")
-
-if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        test_with_sample_data()
-    else:
-        print("Weekly Recap Builder")
-        print("This module is typically called from build_gazette.py")
-        print("\nTo test with sample data:")
-        print("  python weekly_recap.py test")
+        log.error(f"Failed to build weekly recap: {e}")
+        raise
