@@ -1,123 +1,54 @@
-name: Build Gridiron Gazette
+name: Generate Gridiron Gazette
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger
     inputs:
-      league_id:
-        description: ESPN League ID
-        required: true
-        default: "887998"
-      year:
-        description: Season year
-        required: true
-        default: "2025"
       week:
-        description: Week number (leave blank to use current)
-        required: false
-        default: ""
-      use_llm:
-        description: Use OpenAI for Sabre recaps? (true/false)
+        description: 'Week number'
         required: true
-        default: "true"
-  # optional: run every Tuesday at 9am Central (adjust as needed)
+        default: '1'
+      year:
+        description: 'Year'
+        required: true
+        default: '2025'
   schedule:
-    - cron: "0 14 * * TUE" # 14:00 UTC == 9:00 America/Chicago (DST aware in GH is not guaranteed)
-
-permissions:
-  contents: read
-
-concurrency:
-  group: gazette-${{ github.ref }}
-  cancel-in-progress: false
+    - cron: '0 10 * * 2'  # Tuesdays at 10 AM
 
 jobs:
-  build:
+  generate-gazette:
     runs-on: ubuntu-latest
-
-    env:
-      # ESPN cookies (required)
-      ESPN_S2:   ${{ secrets.ESPN_S2 }}
-      ESPN_SWID: ${{ secrets.ESPN_SWID }}
-      # OpenAI (optional; if missing, StoryMaker falls back to template humor)
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_MODEL:   ${{ secrets.OPENAI_MODEL || 'gpt-4o-mini' }}
-      # Optional logos/sponsor vars (add your own secrets/vars as needed)
-      TEAM_LOGOS_FILE: team_logos.json
-      LEAGUE_LOGO:     ${{ vars.LEAGUE_LOGO }}
-      SPONSOR_LOGO:    ${{ vars.SPONSOR_LOGO }}
-      SPONSOR_LINE:    ${{ vars.SPONSOR_LINE }}
-      FOOTER_NOTE:     ${{ vars.FOOTER_NOTE }}
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          # If you added the simple OpenAI wrapper:
-          pip install openai
-
-      - name: Install brand fonts (Graduate/Inter) if present
-        run: |
-          mkdir -p ~/.local/share/fonts
-          if compgen -G "assets/fonts/*.ttf" > /dev/null; then
-            cp assets/fonts/*.ttf ~/.local/share/fonts/
-            fc-cache -f -v
-          else
-            echo "No custom TTFs found in assets/fonts/; skipping."
-          fi
-
-      - name: (Optional) Print week detection
-        run: |
-          python - << 'PY'
-          import os
-          print("Using week:", os.environ.get("GAZETTE_WEEK","(dynamic)"))
-          PY
-
-      - name: Build Gazette DOCX (Sabre recaps)
-        env:
-          LLM_BLURBS: ${{ inputs.use_llm }}
-        run: |
-          python build_gazette.py \
-            --league-id "${{ inputs.league_id }}" \
-            --year "${{ inputs.year }}" \
-            ${{ inputs.week && format('--week {0}', inputs.week) || '' }} \
-            --template "recap_template.docx" \
-            --output   "recaps/Gazette_{year}_W{week02}.docx" \
-            ${{ inputs.use_llm == 'true' && '--llm-blurbs' || '--no-llm' }} \
-            --verbose
-
-      - name: Install LibreOffice for PDF conversion
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libreoffice
-
-      - name: Convert DOCX to PDF
-        run: |
-          ls -la recaps || true
-          DOCX=$(ls recaps/*.docx | tail -n 1)
-          echo "Converting $DOCX"
-          libreoffice --headless --convert-to pdf --outdir recaps "$DOCX"
-          ls -la recaps
-
-      - name: Upload Gazette artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Gazette_${{ inputs.year }}_W${{ inputs.week || 'auto' }}
-          path: |
-            recaps/*.docx
-            recaps/*.pdf
-          if-no-files-found: error
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Generate Gazette
+      env:
+        ESPN_S2: ${{ secrets.ESPN_S2 }}
+        SWID: ${{ secrets.SWID }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        LEAGUE_ID: ${{ secrets.LEAGUE_ID }}
+        YEAR: ${{ github.event.inputs.year || '2025' }}
+        WEEK_NUMBER: ${{ github.event.inputs.week || github.run_number }}
+      run: |
+        python build_gazette.py
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: gazette-week-${{ github.event.inputs.week }}
+        path: |
+          output/*.docx
+          output/*.pdf
+    
+    - name: Notify completion
+      if: always()
+      run: |
+        echo "Gazette generation completed!"
