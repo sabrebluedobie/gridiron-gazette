@@ -408,7 +408,7 @@ def _awards(rows: List[MatchRow]) -> Dict[str, Any]:
     
     for r in rows:
         all_team_scores.extend([(r.home_name, r.home_score), (r.away_name, r.away_score)])
-        # For kitty award, we want the team that lost by the smallest margin
+        # For kitty award, we want the team that lost by the largest margin
         if r.gap > 0:  # Only if there was an actual gap
             if r.winner == r.home_name:
                 # Away team lost
@@ -422,7 +422,7 @@ def _awards(rows: List[MatchRow]) -> Dict[str, Any]:
     
     # Get the closest loss (smallest margin)
     if kitty_candidates:
-        kitty_loser, kitty_winner, kitty_gap = min(kitty_candidates, key=lambda x: x[2])
+        kitty_loser, kitty_winner, kitty_gap = max(kitty_candidates, key=lambda x: x[2])
     else:
         kitty_loser, kitty_winner, kitty_gap = "", "", 0
 
