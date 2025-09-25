@@ -71,7 +71,7 @@ SABRE_PROMPT: Dict[str, Any] = {
     "rhetorical_devices": {
         "metaphors": ["folded like a lawn chair in a hurricane", "tackled like a coupon in Black Friday"],
         "comparisons": ["like my tail when the treat jar pops", "like a punt into a headwind"],
-        "fourth_wall": ["Sabre here—I don't make the rules, I just howl them."],
+        "fourth_wall": ["Sabre here—I don't make the rules, I just howl at them."],
     },
     "must_include": [
         "One concrete detail: {stat_line|swing|injury_note|bench_mistake}.",
