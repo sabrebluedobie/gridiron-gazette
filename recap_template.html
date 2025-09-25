@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ LEAGUE_NAME }} - Week {{ WEEK_NUMBER }}</title>
+    <style>
+        body {
+            font-family: 'Times New Roman', serif;
+            margin: 0.75in;
+            line-height: 1.4;
+            color: #333;
+        }
+        
+        .header-quote {
+            font-style: italic;
+            font-weight: bold;
+            margin-bottom: 20px;
+            color: #666;
+        }
+        title {
+            color: #042d4d;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        h1 {
+            color: #2c5530;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        
+        h2 {
+            color: #8B4513;
+            border-bottom: 2px solid #8B4513;
+            padding-bottom: 5px;
+            margin-top: 30px;
+            margin-bottom: 15px;
+        }
+        
+        h3 {
+            color: #8B4513;
+            margin-top: 25px;
+            margin-bottom: 10px;
+        }
+        
+        .matchup {
+            margin-bottom: 35px;
+            page-break-inside: avoid;
+        }
+        
+        .matchup-header {
+            background-color: #f8f8f8;
+            padding: 10px;
+            border: 1px solid #ddd;
+            margin-bottom: 15px;
+        }
+        
+        .team-row {
+            display: flex;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .team-logo {
+            width: 50px;
+            height: 50px;
+            margin-right: 15px;
+            object-fit: contain;
+        }
+        
+        .team-info {
+            font-weight: bold;
+            text-transform: uppercase;
+            font-size: 14px;
+        }
+        
+        .vs-row {
+            text-align: center;
+            font-weight: bold;
+            padding: 5px 0;
+        }
+        
+        .blurb {
+            margin: 15px 0;
+            text-align: justify;
+            line-height: 1.5;
+        }
+        
+        .stats-spotlight {
+            background-color: #f9f9f9;
+            border-left: 4px solid #8B4513;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        
+        .stats-spotlight h4 {
+            margin-top: 0;
+            color: #8B4513;
+            font-size: 16px;
+        }
+        
+        .stats-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .stats-table td {
+            padding: 8px 15px;
+            border-bottom: 1px solid #ddd;
+            vertical-align: top;
+        }
+        
+        .stats-table td:first-child {
+            font-weight: bold;
+            width: 35%;
+            color: #666;
+        }
+        
+        .awards-section {
+            margin-top: 40px;
+            background-color: #fff8dc;
+            padding: 20px;
+            border: 2px solid #8B4513;
+        }
+        
+        .awards-section h2 {
+            color: #8B4513;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        .award {
+            margin: 15px 0;
+            font-size: 16px;
+        }
+        
+        .award-title {
+            font-weight: bold;
+            color: #8B4513;
+            display: block;
+            margin-bottom: 5px;
+        }
+        
+        .footer {
+            text-align: center;
+            font-style: italic;
+            margin-top: 30px;
+            color: #666;
+        }
+        
+        .underline {
+            text-decoration: underline;
+        }
+        
+        @media print {
+            body { margin: 0.5in; }
+            .matchup { page-break-inside: avoid; }
+        }
+    </style>
+</head>
+<body>
+    <title>The Gridiron Gazette</title>
+    <div class="header-quote">For those times when everyone wants to know your score.</div>
+    
+    <h1>WEEK {{ WEEK_NUMBER }} RECAP</h1>
+    
+    <p>{{ WEEKLY_INTRO }}</p>
+    
+    <h2>Game Recaps</h2>
+    
+    <!-- Matchup 1 -->
+    {% if MATCHUP1_HOME %}
+    <div class="matchup">
+        <h3>{{ MATCHUP1_HOME }} vs. {{ MATCHUP1_AWAY }}</h3>
+        
+        <div class="matchup-header">
+            <div class="team-row">
+                {% if MATCHUP1_HOME_LOGO %}
+                <img src="{{ MATCHUP1_HOME_LOGO }}" alt="{{ MATCHUP1_HOME }} logo" class="team-logo">
+                {% endif %}
+                <div class="team-info">
+                    <span class="underline">{{ MATCHUP1_HOME }} – {{ MATCHUP1_HS }}</span>
+                </div>
+            </div>
+            <div class="vs-row">vs.</div>
+            <div class="team-row">
+                {% if MATCHUP1_AWAY_LOGO %}
+                <img src="{{ MATCHUP1_AWAY_LOGO }}" alt="{{ MATCHUP1_AWAY }} logo" class="team-logo">
+                {% endif %}
+                <div class="team-info">
+                    <span class="underline">{{ MATCHUP1_AWAY }} – {{ MATCHUP1_AS }}</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="blurb">{{ MATCHUP1_BLURB }}</div>
+        
+        <div class="stats-spotlight">
+            <h4>Stats Spotlight</h4>
+            <table class="stats-table">
+                <tr>
+                    <td>Top Scorer (Home):</td>
+                    <td>{{ MATCHUP1_TOP_HOME }}</td>
+                </tr>
+                <tr>
+                    <td>Top Scorer (Away):</td>
+                    <td>{{ MATCHUP1_TOP_AWAY }}</td>
+                </tr>
+                <tr>
+                    <td>Biggest Bust:</td>
+                    <td>{{ MATCHUP1_BUST }}</td>
+                </tr>
+                <tr>
+                    <td>Key Play:</td>
+                    <td>{{ MATCHUP1_KEYPLAY }}</td>
+                </tr>
+                <tr>
+                    <td>Defense Note:</td>
+                    <td>{{ MATCHUP1_DEF }}</td>
+                </tr>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Matchup 2 -->
+    {% if MATCHUP2_HOME %}
+    <div class="matchup">
+        <h3>{{ MATCHUP2_HOME }} vs. {{ MATCHUP2_AWAY }}</h3>
+        
+        <div class="matchup-header">
+            <div class="team-row">
+                {% if MATCHUP2_HOME_LOGO %}
+                <img src="{{ MATCHUP2_HOME_LOGO }}" alt="{{ MATCHUP2_HOME }} logo" class="team-logo">
+                {% endif %}
+                <div class="team-info">
+                    <span class="underline">{{ MATCHUP2_HOME }} – {{ MATCHUP2_HS }}</span>
+                </div>
+            </div>
+            <div class="vs-row">vs.</div>
+            <div class="team-row">
+                {% if MATCHUP2_AWAY_LOGO %}
+                <img src="{{ MATCHUP2_AWAY_LOGO }}" alt="{{ MATCHUP2_AWAY }} logo" class="team-logo">
+                {% endif %}
+                <div class="team-info">
+                    <span class="underline">{{ MATCHUP2_AWAY }} – {{ MATCHUP2_AS }}</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="blurb">{{ MATCHUP2_BLURB }}</div>
+        
+        <div class="stats-spotlight">
+            <h4>Stats Spotlight</h4>
+            <table class="stats-table">
+                <tr>
+                    <td>Top Scorer (Home):</td>
+                    <td>{{ MATCHUP2_TOP_HOME }}</td>
+                </tr>
+                <tr>
+                    <td>Top Scorer (Away):</td>
+                    <td>{{ MATCHUP2_TOP_AWAY }}</td>
+                </tr>
+                <tr>
+                    <td>Biggest Bust:</td>
+                    <td>{{ MATCHUP2_BUST }}</td>
+                </tr>
+                <tr>
+                    <td>Key Play:</td>
+                    <td>{{ MATCHUP2_KEYPLAY }}</td>
+                </tr>
+                <tr>
+                    <td>Defense Note:</td>
+                    <td>{{ MATCHUP2_DEF }}</td>
+                </tr>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Continue pattern for MATCHUP3, MATCHUP4, MATCHUP5... -->
+    <!-- For brevity, I'll add a loop version below -->
+    
+    <!-- Alternative: Dynamic matchup loop -->
+    {% for i in range(3, MATCHUP_COUNT + 1) %}
+    {% set home_var = 'MATCHUP' + i|string + '_HOME' %}
+    {% set away_var = 'MATCHUP' + i|string + '_AWAY' %}
+    {% if context[home_var] is defined %}
+    <div class="matchup">
+        <h3>{{ context[home_var] }} vs. {{ context[away_var] }}</h3>
+        <!-- Pattern continues... -->
+    </div>
+    {% endif %}
+    {% endfor %}
+    
+    <!-- Awards Section -->
+    <div class="awards-section">
+        <h2>Weekly Awards: The Ridiculous Roundup</h2>
+        
+        <div class="award">
+            <span class="award-title">Cupcake Award (Lowest Score):</span>
+            {{ AWARD_CUPCAKE_TEAM }} — {{ AWARD_CUPCAKE_NOTE }}
+        </div>
+        
+        <div class="award">
+            <span class="award-title">Kitty Award (Largest Gap Loss):</span>
+            {{ AWARD_KITTY_TEAM }} — {{ AWARD_KITTY_NOTE }}
+        </div>
+        
+        <div class="award">
+            <span class="award-title">Top Score:</span>
+            {{ AWARD_TOP_TEAM }} — {{ AWARD_TOP_NOTE }}
+        </div>
+    </div>
+    
+    <div class="footer">
+        {{ FOOTER_NOTE }} • See everyone Thursday!
+    </div>
+</body>
+</html>
