@@ -119,7 +119,7 @@ def _find_logo_file(team_name: str, logo_type: str = "team") -> Optional[Path]:
     # Logo directories to search (in priority order)
     if logo_type == "team":
         search_dirs = [
-            Path("logos/teamlogos"),
+            Path("logos/team_logos"),
             Path("logos/team_logos"),
             Path("logos"),
             Path("media/logos"),
@@ -128,7 +128,7 @@ def _find_logo_file(team_name: str, logo_type: str = "team") -> Optional[Path]:
     elif logo_type == "league":
         search_dirs = [
             Path("logos/league_logos"),
-            Path("logos/teamlogos"),  # Browns logo might be here
+            Path("logos/team_logos"),  # Browns logo might be here
             Path("logos/team_logos"),
             Path("logos"),
             Path(".")
@@ -292,7 +292,7 @@ def _prepare_image_context(doc_template: DocxTemplate, context: Dict[str, Any]) 
     
     # Process league logo - special handling for Browns
     browns_paths = [
-        Path("logos/teamlogos/brownseakc.png"),
+        Path("logos/team_logos/brownseakc.png"),
         Path("logos/team_logos/brownseakc.png"),
         Path("logos/league_logos/brownseakc.png"),
         Path("logos/brownseakc.png"),

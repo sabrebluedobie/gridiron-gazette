@@ -49,7 +49,7 @@ def diagnose_logos():
     
     required_dirs = [
         "logos",
-        "logos/teamlogos",
+        "logos/team_logos",
         "logos/league_logos",
         "logos/sponsor_logos"
     ]
@@ -84,7 +84,7 @@ def diagnose_logos():
             for ext in ['.png', '.jpg', '.jpeg', '.gif']:
                 # Check multiple locations
                 paths_to_check = [
-                    f"logos/teamlogos/{variation}{ext}",
+                    f"logos/team_logos/{variation}{ext}",
                     f"logos/team_logos/{variation}{ext}",
                     f"logos/{variation}{ext}",
                     f"{variation}{ext}"
@@ -111,7 +111,7 @@ def diagnose_logos():
     print("-" * 40)
     
     browns_paths = [
-        "logos/teamlogos/brownseakc.png",
+        "logos/team_logos/brownseakc.png",
         "logos/team_logos/brownseakc.png",
         "logos/league_logos/brownseakc.png",
         "logos/brownseakc.png",
@@ -141,17 +141,17 @@ def diagnose_logos():
         print("Create/add these logo files:")
         for team in missing_logos:
             suggested_name = team_mappings[team][0]
-            print(f"  - logos/teamlogos/{suggested_name}.png")
+            print(f"  - logos/team_logos/{suggested_name}.png")
     
     if not browns_found:
         print("\n⚠️  MISSING BROWNS LEAGUE LOGO:")
-        print("  Add your league logo as: logos/teamlogos/brownseakc.png")
+        print("  Add your league logo as: logos/team_logos/brownseakc.png")
     
     if not missing_logos and browns_found:
         print("\n✅ ALL LOGOS FOUND! Your setup is complete.")
     else:
         print("\n📝 TO FIX:")
-        print("1. Add the missing logo files to logos/teamlogos/")
+        print("1. Add the missing logo files to logos/team_logos/")
         print("2. Use PNG format for best compatibility")
         print("3. Keep filenames simple (no spaces or special characters)")
         print("4. Run this diagnostic again to verify")
@@ -168,11 +168,11 @@ def create_placeholder_logos(missing_teams: List[str], mappings: Dict[str, List[
     print("\nCreating placeholder logos...")
     
     # Ensure directory exists
-    Path("logos/teamlogos").mkdir(parents=True, exist_ok=True)
+    Path("logos/team_logos").mkdir(parents=True, exist_ok=True)
     
     for team in missing_teams:
         if team in mappings:
-            filename = f"logos/teamlogos/{mappings[team][0]}.png"
+            filename = f"logos/team_logos/{mappings[team][0]}.png"
             
             # Create a simple placeholder PNG (1x1 pixel, transparent)
             # This is a minimal PNG file
@@ -226,7 +226,7 @@ def organize_existing_logos():
         if len(found_images) > 20:
             print(f"  ... and {len(found_images) - 20} more")
         
-        response = input("\nWould you like to copy potential logo files to logos/teamlogos? (y/n): ")
+        response = input("\nWould you like to copy potential logo files to logos/team_logos? (y/n): ")
         if response.lower() == 'y':
             copy_potential_logos(found_images)
     else:
@@ -235,7 +235,7 @@ def organize_existing_logos():
 
 def copy_potential_logos(image_paths: List[Path]):
     """Copy potential logo files to the logos directory"""
-    Path("logos/teamlogos").mkdir(parents=True, exist_ok=True)
+    Path("logos/team_logos").mkdir(parents=True, exist_ok=True)
     
     # Keywords that might indicate a logo
     logo_keywords = ['logo', 'team', 'badge', 'icon', 'hawks', 'birds', 'blues', 
@@ -246,10 +246,10 @@ def copy_potential_logos(image_paths: List[Path]):
     for img_path in image_paths:
         filename = img_path.name.lower()
         if any(keyword in filename for keyword in logo_keywords):
-            dest = Path("logos/teamlogos") / img_path.name
+            dest = Path("logos/team_logos") / img_path.name
             if not dest.exists():
                 shutil.copy2(img_path, dest)
-                print(f"  ✅ Copied {img_path.name} to logos/teamlogos/")
+                print(f"  ✅ Copied {img_path.name} to logos/team_logos/")
                 copied += 1
     
     if copied:
