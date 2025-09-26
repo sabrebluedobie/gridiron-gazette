@@ -12,7 +12,17 @@ from typing import Any, Dict, Optional, List
 
 # HTML/PDF generation
 from jinja2 import Environment, FileSystemLoader
-from weasyprint import HTML, CSS
+
+# Try WeasyPrint first, fall back to pdfkit
+USE_WEASYPRINT = False
+try:
+    from weasyprint import HTML, CSS
+    USE_WEASYPRINT = True
+except ImportError:
+    try:
+        import pdfkit
+    except ImportError:
+        pass
 
 import gazette_data
 from storymaker import (
@@ -33,6 +43,39 @@ try:
 except Exception:
     openai_llm = None
     logger.info("OpenAI LLM not available, will use fallback templates")
+
+
+def clean_for_pdf(text):
+    """Clean text for PDF generation, handling emojis and special characters safely"""
+    if not isinstance(text, str):
+        return text
+    
+    # Common emoji replacements for team names
+    replacements = {
+        '🏉': '[FB]',
+        '💀': '[SKULL]',
+        '🏆': '[TROPHY]',
+        '😿': '[CAT]',
+        '🧁': '[CUPCAKE]',
+        '🐾': '[PAW]',
+        '🔥': '[FIRE]',
+        '⚡': '[BOLT]',
+        '💪': '[FLEX]',
+        '👑': '[CROWN]',
+    }
+    
+    for emoji, replacement in replacements.items():
+        text = text.replace(emoji, replacement)
+    
+    # Handle UTF-8 safely
+    try:
+        # Encode and decode to handle any problematic characters
+        text = text.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
+    except Exception:
+        # Fallback to ASCII if UTF-8 fails
+        text = text.encode('ascii', errors='replace').decode('ascii', errors='replace')
+    
+    return text
 
 
 def build_weekly_recap(
@@ -78,6 +121,9 @@ def build_weekly_recap(
     # Clean all markdown from the context
     ctx = clean_all_markdown_in_dict(ctx)
     
+    # Clean all text for PDF (handle emojis and special characters)
+    ctx = _clean_context_for_pdf(ctx)
+    
     # Render HTML and convert to PDF
     out = _render_html_to_pdf(template, output_path, ctx)
     
@@ -85,15 +131,38 @@ def build_weekly_recap(
     return out
 
 
+def _clean_context_for_pdf(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Clean all string values in context for PDF generation"""
+    cleaned = {}
+    for key, value in ctx.items():
+        if isinstance(value, str):
+            cleaned[key] = clean_for_pdf(value)
+        elif isinstance(value, dict):
+            cleaned[key] = _clean_context_for_pdf(value)
+        elif isinstance(value, list):
+            cleaned[key] = [clean_for_pdf(item) if isinstance(item, str) else item for item in value]
+        else:
+            cleaned[key] = value
+    return cleaned
+
+
 def _render_html_to_pdf(template_path: str, output_pattern: str, ctx: Dict[str, Any]) -> str:
-    """Render HTML template and convert to PDF using WeasyPrint"""
-    
-    from weasyprint import HTML, CSS
-    from jinja2 import Environment, FileSystemLoader
+    """Render HTML template and convert to PDF"""
     
     tpl_path = Path(template_path)
     if not tpl_path.exists():
-        raise FileNotFoundError(f"Template not found: {template_path}")
+        # Try alternate paths
+        alt_paths = [
+            Path("templates") / "recap_template.html",
+            Path("recap_template.html"),
+        ]
+        for alt in alt_paths:
+            if alt.exists():
+                tpl_path = alt
+                logger.info(f"Using template: {tpl_path}")
+                break
+        else:
+            raise FileNotFoundError(f"Template not found: {template_path}")
     
     # Get week and year for output filename
     week = int(ctx.get("WEEK_NUMBER", ctx.get("WEEK", 0)))
@@ -109,17 +178,89 @@ def _render_html_to_pdf(template_path: str, output_pattern: str, ctx: Dict[str, 
     output_file = Path(output_path)
     output_file.parent.mkdir(parents=True, exist_ok=True)
     
-    # Set up Jinja2 environment
+    # Set up Jinja2 environment with UTF-8 encoding
     template_dir = tpl_path.parent if tpl_path.parent.exists() else Path('.')
-    env = Environment(loader=FileSystemLoader(str(template_dir)))
+    env = Environment(
+        loader=FileSystemLoader(str(template_dir)),
+        autoescape=True
+    )
     template = env.get_template(tpl_path.name)
     
     # Render HTML
-    html_content = template.render(**ctx)
+    try:
+        html_content = template.render(**ctx)
+    except Exception as e:
+        logger.error(f"Template rendering failed: {e}")
+        # Save context for debugging
+        debug_file = output_file.with_suffix('.debug.json')
+        with open(debug_file, 'w', encoding='utf-8') as f:
+            json.dump(ctx, f, indent=2, ensure_ascii=False, default=str)
+        logger.info(f"Context saved to {debug_file} for debugging")
+        raise
     
-    # Convert to PDF with WeasyPrint
-    HTML(string=html_content).write_pdf(str(output_file))
-    logger.info(f"✅ Generated PDF: {output_file}")
+    # Save HTML for debugging (with proper encoding)
+    html_debug = output_file.with_suffix('.html')
+    try:
+        with open(html_debug, 'w', encoding='utf-8', errors='replace') as f:
+            f.write(html_content)
+        logger.debug(f"Saved HTML debug file: {html_debug}")
+    except Exception as e:
+        logger.warning(f"Could not save HTML debug file: {e}")
+    
+    # Convert to PDF
+    try:
+        if USE_WEASYPRINT:
+            # WeasyPrint with encoding handling
+            from weasyprint import HTML
+            HTML(string=html_content, encoding='utf-8').write_pdf(str(output_file))
+            logger.info(f"✅ Generated PDF with WeasyPrint: {output_file}")
+        else:
+            # pdfkit with encoding handling
+            import pdfkit
+            options = {
+                'page-size': 'Letter',
+                'orientation': 'Portrait',
+                'margin-top': '0in',
+                'margin-right': '0in',
+                'margin-bottom': '0in',
+                'margin-left': '0in',
+                'encoding': 'UTF-8',
+                'no-outline': None,
+                'enable-local-file-access': None,
+                'print-media-type': None,
+                'disable-smart-shrinking': None,
+                'dpi': 300,
+                'image-quality': 100,
+                'quiet': '',
+            }
+            
+            # Try to configure pdfkit
+            try:
+                config = pdfkit.configuration()
+                pdfkit.from_string(html_content, str(output_file), options=options, configuration=config)
+            except OSError:
+                # Try without configuration
+                pdfkit.from_string(html_content, str(output_file), options=options)
+            
+            logger.info(f"✅ Generated PDF with pdfkit: {output_file}")
+        
+    except Exception as e:
+        logger.error(f"Failed to generate PDF: {e}")
+        logger.info(f"💡 HTML version saved at: {html_debug}")
+        logger.info("You can open the HTML file in a browser and print to PDF as a workaround")
+        
+        # Try a fallback method if available
+        if not USE_WEASYPRINT:
+            logger.info("Trying WeasyPrint as fallback...")
+            try:
+                from weasyprint import HTML
+                HTML(string=html_content, encoding='utf-8').write_pdf(str(output_file))
+                logger.info(f"✅ Generated PDF with WeasyPrint fallback: {output_file}")
+                return str(output_file)
+            except Exception as e2:
+                logger.error(f"WeasyPrint fallback also failed: {e2}")
+        
+        raise
     
     return str(output_file)
 
@@ -145,12 +286,19 @@ def _attach_team_logos(ctx: Dict[str, Any]) -> None:
         if logo_path.exists():
             ctx["LEAGUE_LOGO"] = str(logo_path.resolve())
         else:
-            ctx["LEAGUE_LOGO"] = ctx.get("LEAGUE_NAME", "")
+            # Use text instead of missing logo
+            ctx["LEAGUE_LOGO"] = ctx.get("LEAGUE_NAME", "League")
+    else:
+        ctx["LEAGUE_LOGO"] = ctx.get("LEAGUE_NAME", "League")
     
     if "SPONSOR_LOGO" in logo_mappings:
         logo_path = Path(logo_mappings["SPONSOR_LOGO"])
         if logo_path.exists():
             ctx["SPONSOR_LOGO"] = str(logo_path.resolve())
+        else:
+            ctx["SPONSOR_LOGO"] = "Gridiron Gazette"
+    else:
+        ctx["SPONSOR_LOGO"] = "Gridiron Gazette"
     
     # Add team logos for each matchup
     count = ctx.get("MATCHUP_COUNT", 7)
@@ -158,22 +306,35 @@ def _attach_team_logos(ctx: Dict[str, Any]) -> None:
         home_team = ctx.get(f"MATCHUP{i}_HOME")
         away_team = ctx.get(f"MATCHUP{i}_AWAY")
         
-        if home_team and home_team in logo_mappings:
-            logo_path = Path(logo_mappings[home_team])
-            if logo_path.exists():
+        # Clean team names for matching
+        home_team_clean = clean_for_pdf(home_team) if home_team else ""
+        away_team_clean = clean_for_pdf(away_team) if away_team else ""
+        
+        # Try both original and cleaned names for logo lookup
+        if home_team:
+            logo_path = None
+            if home_team in logo_mappings:
+                logo_path = Path(logo_mappings[home_team])
+            elif home_team_clean in logo_mappings:
+                logo_path = Path(logo_mappings[home_team_clean])
+            
+            if logo_path and logo_path.exists():
                 ctx[f"MATCHUP{i}_HOME_LOGO"] = str(logo_path.resolve())
             else:
-                logger.warning(f"Logo file not found for {home_team}: {logo_path}")
                 ctx[f"MATCHUP{i}_HOME_LOGO"] = ""
         else:
             ctx[f"MATCHUP{i}_HOME_LOGO"] = ""
         
-        if away_team and away_team in logo_mappings:
-            logo_path = Path(logo_mappings[away_team])
-            if logo_path.exists():
+        if away_team:
+            logo_path = None
+            if away_team in logo_mappings:
+                logo_path = Path(logo_mappings[away_team])
+            elif away_team_clean in logo_mappings:
+                logo_path = Path(logo_mappings[away_team_clean])
+            
+            if logo_path and logo_path.exists():
                 ctx[f"MATCHUP{i}_AWAY_LOGO"] = str(logo_path.resolve())
             else:
-                logger.warning(f"Logo file not found for {away_team}: {logo_path}")
                 ctx[f"MATCHUP{i}_AWAY_LOGO"] = ""
         else:
             ctx[f"MATCHUP{i}_AWAY_LOGO"] = ""
@@ -237,7 +398,7 @@ def _attach_sabre_recaps(ctx: Dict[str, Any]) -> None:
         
         ctx[f"MATCHUP{i}_BLURB"] = recap
         
-        logger.info(f"Generated Sabre recap for matchup {i}: {home} vs {away}")
+        logger.info(f"Generated Sabre recap for matchup {i}: {clean_for_pdf(home)} vs {clean_for_pdf(away)}")
 
 
 def _attach_simple_blurbs(ctx: Dict[str, Any]) -> None:
@@ -321,22 +482,44 @@ def verify_setup():
         print("✅ team_logos.json found")
         
         # Verify logo files
-        with open("team_logos.json", 'r') as f:
-            logos = json.load(f)
-        
-        missing = []
-        for team, path in logos.items():
-            if not Path(path).exists():
-                missing.append(f"  - {path} (for {team})")
-        
-        if missing:
-            print(f"⚠️  Missing {len(missing)} logo files:")
-            for m in missing[:5]:  # Show first 5
-                print(m)
-            if len(missing) > 5:
-                print(f"  ... and {len(missing)-5} more")
+        try:
+            with open("team_logos.json", 'r', encoding='utf-8') as f:
+                logos = json.load(f)
+            
+            missing = []
+            for team, path in logos.items():
+                if not Path(path).exists():
+                    missing.append(f"  - {path} (for {team})")
+            
+            if missing:
+                print(f"⚠️  Missing {len(missing)} logo files:")
+                for m in missing[:5]:  # Show first 5
+                    print(m)
+                if len(missing) > 5:
+                    print(f"  ... and {len(missing)-5} more")
+        except Exception as e:
+            print(f"⚠️  Could not verify logos: {e}")
     else:
         print("⚠️  team_logos.json not found (logos will be skipped)")
+    
+    # Check for PDF generation capability
+    pdf_available = False
+    if USE_WEASYPRINT:
+        print("✅ WeasyPrint is available for PDF generation")
+        pdf_available = True
+    else:
+        try:
+            import pdfkit
+            pdfkit.configuration()
+            print("✅ pdfkit is available for PDF generation")
+            pdf_available = True
+        except:
+            print("⚠️  pdfkit not properly configured")
+    
+    if not pdf_available:
+        print("❌ No PDF generator available!")
+        print("   Install WeasyPrint: pip install weasyprint")
+        print("   Or install wkhtmltopdf from https://wkhtmltopdf.org/downloads.html")
         all_good = False
     
     # Check for required Python packages
