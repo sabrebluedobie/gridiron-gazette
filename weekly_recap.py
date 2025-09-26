@@ -86,22 +86,14 @@ def build_weekly_recap(
 
 
 def _render_html_to_pdf(template_path: str, output_pattern: str, ctx: Dict[str, Any]) -> str:
-    """Render HTML template and convert to PDF"""
+    """Render HTML template and convert to PDF using WeasyPrint"""
+    
+    from weasyprint import HTML, CSS
+    from jinja2 import Environment, FileSystemLoader
     
     tpl_path = Path(template_path)
     if not tpl_path.exists():
-        # Try alternate paths
-        alt_paths = [
-            Path("templates") / "recap_template.html",
-            Path("recap_template.html"),
-        ]
-        for alt in alt_paths:
-            if alt.exists():
-                tpl_path = alt
-                logger.info(f"Using template: {tpl_path}")
-                break
-        else:
-            raise FileNotFoundError(f"Template not found: {template_path}")
+        raise FileNotFoundError(f"Template not found: {template_path}")
     
     # Get week and year for output filename
     week = int(ctx.get("WEEK_NUMBER", ctx.get("WEEK", 0)))
@@ -125,42 +117,9 @@ def _render_html_to_pdf(template_path: str, output_pattern: str, ctx: Dict[str, 
     # Render HTML
     html_content = template.render(**ctx)
     
-    # Save HTML for debugging
-    html_debug = output_file.with_suffix('.html')
-    with open(html_debug, 'w', encoding='utf-8') as f:
-        f.write(html_content)
-    logger.debug(f"Saved HTML debug file: {html_debug}")
-    
-    # PDF conversion options
-    options = {
-        'page-size': 'Letter',
-        'orientation': 'Portrait',
-        'margin-top': '0in',
-        'margin-right': '0in',
-        'margin-bottom': '0in',
-        'margin-left': '0in',
-        'encoding': 'UTF-8',
-        'no-outline': None,
-        'enable-local-file-access': None,
-        'print-media-type': None,
-        'disable-smart-shrinking': None,
-        'dpi': 300,
-        'image-quality': 100,
-    }
-    
-    try:
-        # Convert HTML to PDF
-        pdfkit.from_string(html_content, str(output_file), options=options)
-        logger.info(f"✅ Generated PDF: {output_file}")
-        
-    except Exception as e:
-        logger.error(f"Failed to generate PDF: {e}")
-        logger.info(f"💡 HTML version saved at: {html_debug}")
-        logger.info("Make sure wkhtmltopdf is installed:")
-        logger.info("  Mac: brew install wkhtmltopdf")
-        logger.info("  Windows: Download from https://wkhtmltopdf.org/downloads.html")
-        logger.info("  Linux: sudo apt-get install wkhtmltopdf")
-        raise
+    # Convert to PDF with WeasyPrint
+    HTML(string=html_content).write_pdf(output_path)
+    logger.info(f"✅ Generated PDF: {output_file}")
     
     return str(output_file)
 
