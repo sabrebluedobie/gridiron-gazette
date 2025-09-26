@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Weekly Recap Builder for Gridiron Gazette
+Weekly Recap Builder for Gridiron Gazette - HTML VERSION
 COMPLETE VERSION using team_logos.json for all logo mappings
-- Properly embeds images from JSON mappings
-- Removes blank pages
-- Fixes margin issues and header/footer sliding
+- Generates HTML from Jinja2 template
+- Converts to PDF with proper layout control
+- Embeds images using file paths for HTML img tags
+- CSS handles all formatting and layout
 - Supports multiple leagues via JSON
 """
 from __future__ import annotations
@@ -15,14 +16,9 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional, List
 
-# DOCX handling with image support and formatting control
-from docxtpl import DocxTemplate, InlineImage
-from docx import Document
-from docx.shared import Mm, Inches, Pt
-from docx.enum.section import WD_SECTION
-from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
+# HTML/PDF generation
+from jinja2 import Environment, FileSystemLoader
+import pdfkit
 
 import gazette_data
 from storymaker import (
@@ -69,34 +65,35 @@ class LogoManager:
             logger.warning(f"Logo mappings file not found: {self.json_file}")
             self.logo_mappings = {}
     
-    def get_team_logo(self, team_name: str) -> Optional[Path]:
-        """Get logo path for a team from mappings"""
+    def get_team_logo(self, team_name: str) -> Optional[str]:
+        """Get logo path for a team from mappings (returns path string for HTML)"""
         if team_name in self.logo_mappings:
             logo_path = Path(self.logo_mappings[team_name])
             if logo_path.exists():
-                return logo_path
+                # Convert to absolute path for HTML img src
+                return str(logo_path.resolve())
             else:
                 logger.warning(f"Logo file not found: {logo_path} for team {team_name}")
         else:
             logger.warning(f"No mapping found for team: {team_name}")
         return None
     
-    def get_league_logo(self) -> Optional[Path]:
-        """Get league logo from mappings"""
+    def get_league_logo(self) -> Optional[str]:
+        """Get league logo from mappings (returns path string for HTML)"""
         if "LEAGUE_LOGO" in self.logo_mappings:
             logo_path = Path(self.logo_mappings["LEAGUE_LOGO"])
             if logo_path.exists():
-                return logo_path
+                return str(logo_path.resolve())
             else:
                 logger.warning(f"League logo file not found: {logo_path}")
         return None
     
-    def get_sponsor_logo(self) -> Optional[Path]:
-        """Get sponsor logo from mappings"""
+    def get_sponsor_logo(self) -> Optional[str]:
+        """Get sponsor logo from mappings (returns path string for HTML)"""
         if "SPONSOR_LOGO" in self.logo_mappings:
             logo_path = Path(self.logo_mappings["SPONSOR_LOGO"])
             if logo_path.exists():
-                return logo_path
+                return str(logo_path.resolve())
             else:
                 logger.warning(f"Sponsor logo file not found: {logo_path}")
         return None
@@ -106,25 +103,25 @@ def build_weekly_recap(
     league_id: int,
     year: int,
     week: int,
-    template: str = "recap_template.docx",
-    output_path: str = "recaps/Gazette_{year}_W{week02}.docx",
+    template: str = "recap_template.html",  # Changed to HTML template
+    output_path: str = "recaps/Gazette_{year}_W{week02}.pdf",  # Output PDF
     use_llm_blurbs: bool = True,
     logo_json: str = "team_logos.json"
 ) -> str:
     """
-    Builds the Gazette docx with comprehensive fixes:
+    Builds the Gazette PDF from HTML template with comprehensive fixes:
       1) Fetches ESPN context
       2) Generates Sabre recaps
-      3) Properly embeds images from team_logos.json
+      3) Prepares logo paths for HTML img tags
       4) Cleans markdown
-      5) Renders template
-      6) Post-processes to fix blank pages and margins
+      5) Renders HTML template
+      6) Converts to PDF with precise layout control
     
     Args:
         league_id: ESPN league ID
         year: Season year
         week: Week number
-        template: Path to DOCX template
+        template: Path to HTML template
         output_path: Output path pattern
         use_llm_blurbs: Whether to use LLM for Sabre blurbs
         logo_json: Path to team_logos.json file
@@ -141,31 +138,26 @@ def build_weekly_recap(
     # Add spotlight content
     _attach_spotlight_content(ctx)
     
-    # Clean all markdown from the context
+    # Clean all markdown from the context (keep this for text content)
     ctx = clean_all_markdown_in_dict(ctx)
     
-    # Render the doc WITH PROPER IMAGE EMBEDDING from JSON
-    out = _render_docx_with_images(template, output_path, ctx, logo_json)
+    # Render HTML and convert to PDF
+    out = _render_html_to_pdf(template, output_path, ctx, logo_json)
     
-    # Post-process to fix blank pages and margins
-    _post_process_document(out)
-    
+    logger.info(f"✅ Generated PDF gazette: {out}")
     return out
 
 
-def _render_docx_with_images(template_path: str, out_pattern: str, ctx: Dict[str, Any], logo_json: str) -> str:
+def _render_html_to_pdf(template_path: str, out_pattern: str, ctx: Dict[str, Any], logo_json: str) -> str:
     """
-    Render the DOCX template with proper image embedding using team_logos.json.
+    Render the HTML template with proper image paths and convert to PDF.
     """
     tpl_path = Path(template_path)
     if not tpl_path.exists():
         raise FileNotFoundError(f"Template not found: {tpl_path}")
 
-    # Create DocxTemplate object
-    doc = DocxTemplate(str(tpl_path))
-    
-    # Prepare context with embedded images from JSON mappings
-    image_context = _prepare_image_context_from_json(doc, ctx.copy(), logo_json)
+    # Prepare context with logo file paths for HTML
+    image_context = _prepare_image_context_for_html(ctx.copy(), logo_json)
     
     # Get week number for output filename
     week = int(ctx.get("WEEK_NUMBER", 0) or ctx.get("WEEK", 0) or 0)
@@ -181,34 +173,62 @@ def _render_docx_with_images(template_path: str, out_pattern: str, ctx: Dict[str
     out_file = Path(out_path)
     out_file.parent.mkdir(parents=True, exist_ok=True)
     
-    # Render the template with image context
-    doc.render(image_context)
+    # Set up Jinja2 environment
+    template_dir = tpl_path.parent if tpl_path.parent.exists() else Path('.')
+    env = Environment(loader=FileSystemLoader(str(template_dir)))
+    template = env.get_template(tpl_path.name)
     
-    # Save the document
-    doc.save(str(out_file))
+    # Render HTML
+    html_content = template.render(**image_context)
     
-    logger.info(f"✅ Generated recap document: {out_file}")
-    _log_recap_summary(image_context, out_file)
+    # PDF conversion options for better layout control
+    options = {
+        'page-size': 'Letter',
+        'orientation': 'Portrait',
+        'margin-top': '0.75in',
+        'margin-right': '0.5in',
+        'margin-bottom': '0.75in',
+        'margin-left': '0.5in',
+        'encoding': 'UTF-8',
+        'no-outline': None,
+        'enable-local-file-access': None,  # Allow local images
+        'print-media-type': None,  # Use print CSS
+        'disable-smart-shrinking': None,  # Prevent content shrinking
+        'dpi': 300,  # High quality images
+        'image-quality': 100,
+    }
+    
+    try:
+        # Convert HTML to PDF
+        pdfkit.from_string(html_content, str(out_file), options=options)
+        logger.info(f"✅ Generated PDF gazette: {out_file}")
+        _log_recap_summary(image_context, out_file)
+        
+    except Exception as e:
+        logger.error(f"Failed to generate PDF: {e}")
+        
+        # Fallback: Save HTML for debugging
+        html_debug_path = out_file.with_suffix('.html')
+        with open(html_debug_path, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        logger.info(f"💾 Saved HTML for debugging: {html_debug_path}")
+        raise
     
     return str(out_file)
 
 
-def _prepare_image_context_from_json(doc_template: DocxTemplate, context: Dict[str, Any], logo_json: str) -> Dict[str, Any]:
+def _prepare_image_context_for_html(context: Dict[str, Any], logo_json: str) -> Dict[str, Any]:
     """
-    Convert logo paths to InlineImage objects using team_logos.json mappings.
-    This ensures we use the exact paths specified in the JSON file.
+    Convert logo mappings to file paths for HTML img src attributes.
+    This replaces the DOCX InlineImage approach with simple file paths.
     """
-    logger.info(f"Preparing images from {logo_json}...")
+    logger.info(f"Preparing image paths from {logo_json}...")
     
     # Initialize logo manager with JSON mappings
     logo_manager = LogoManager(logo_json)
     
-    # Standard sizes for consistency (prevents margin issues)
-    TEAM_LOGO_SIZE = Mm(15)  # Smaller for inline team logos
-    HEADER_LOGO_SIZE = Mm(25)  # Larger for header logos
-    
     # Process team logos for each matchup
-    images_embedded = 0
+    images_found = 0
     for i in range(1, 8):
         home_key = f"MATCHUP{i}_HOME"
         away_key = f"MATCHUP{i}_AWAY"
@@ -220,17 +240,9 @@ def _prepare_image_context_from_json(doc_template: DocxTemplate, context: Dict[s
             
             logo_path = logo_manager.get_team_logo(team_name)
             if logo_path:
-                try:
-                    context[logo_key] = InlineImage(
-                        doc_template, 
-                        str(logo_path), 
-                        width=TEAM_LOGO_SIZE
-                    )
-                    logger.info(f"✅ Embedded logo for {team_name}: {logo_path}")
-                    images_embedded += 1
-                except Exception as e:
-                    logger.error(f"Failed to embed logo for {team_name}: {e}")
-                    context[logo_key] = ""
+                context[logo_key] = logo_path
+                logger.info(f"✅ Found logo for {team_name}: {logo_path}")
+                images_found += 1
             else:
                 context[logo_key] = ""
                 logger.warning(f"No logo found for home team: {team_name}")
@@ -242,17 +254,9 @@ def _prepare_image_context_from_json(doc_template: DocxTemplate, context: Dict[s
             
             logo_path = logo_manager.get_team_logo(team_name)
             if logo_path:
-                try:
-                    context[logo_key] = InlineImage(
-                        doc_template, 
-                        str(logo_path), 
-                        width=TEAM_LOGO_SIZE
-                    )
-                    logger.info(f"✅ Embedded logo for {team_name}: {logo_path}")
-                    images_embedded += 1
-                except Exception as e:
-                    logger.error(f"Failed to embed logo for {team_name}: {e}")
-                    context[logo_key] = ""
+                context[logo_key] = logo_path
+                logger.info(f"✅ Found logo for {team_name}: {logo_path}")
+                images_found += 1
             else:
                 context[logo_key] = ""
                 logger.warning(f"No logo found for away team: {team_name}")
@@ -260,17 +264,9 @@ def _prepare_image_context_from_json(doc_template: DocxTemplate, context: Dict[s
     # Process league logo
     league_logo_path = logo_manager.get_league_logo()
     if league_logo_path:
-        try:
-            context["LEAGUE_LOGO"] = InlineImage(
-                doc_template,
-                str(league_logo_path),
-                width=HEADER_LOGO_SIZE
-            )
-            logger.info(f"✅ Embedded league logo: {league_logo_path}")
-            images_embedded += 1
-        except Exception as e:
-            logger.error(f"Failed to embed league logo: {e}")
-            context["LEAGUE_LOGO"] = ""
+        context["LEAGUE_LOGO"] = league_logo_path
+        logger.info(f"✅ Found league logo: {league_logo_path}")
+        images_found += 1
     else:
         context["LEAGUE_LOGO"] = ""
         logger.warning("No league logo found in mappings")
@@ -278,223 +274,15 @@ def _prepare_image_context_from_json(doc_template: DocxTemplate, context: Dict[s
     # Process sponsor logo
     sponsor_logo_path = logo_manager.get_sponsor_logo()
     if sponsor_logo_path:
-        try:
-            context["SPONSOR_LOGO"] = InlineImage(
-                doc_template,
-                str(sponsor_logo_path),
-                width=HEADER_LOGO_SIZE
-            )
-            logger.info(f"✅ Embedded sponsor logo: {sponsor_logo_path}")
-            images_embedded += 1
-        except Exception as e:
-            logger.error(f"Failed to embed sponsor logo: {e}")
-            context["SPONSOR_LOGO"] = ""
+        context["SPONSOR_LOGO"] = sponsor_logo_path
+        logger.info(f"✅ Found sponsor logo: {sponsor_logo_path}")
+        images_found += 1
     else:
         context["SPONSOR_LOGO"] = ""
         logger.warning("No sponsor logo found in mappings")
     
-    logger.info(f"Total images embedded: {images_embedded}")
+    logger.info(f"Total logo paths prepared: {images_found}")
     return context
-
-
-def _post_process_document(doc_path: str) -> None:
-    """
-    Post-process the document to fix formatting issues.
-    Complete version with all functionality:
-    1. Removes empty paragraphs that cause blank pages
-    2. Fixes section breaks
-    3. Adjusts margins for consistency
-    4. Removes excessive spacing
-    5. Fixes header/footer alignment
-    6. Fixes table formatting
-    """
-    logger.info("Post-processing document to fix formatting issues...")
-    
-    try:
-        # Try to use the dedicated formatter module first
-        from document_formatter import apply_formatting_fixes
-        apply_formatting_fixes(doc_path)
-        logger.info("✅ Document formatting fixed using dedicated formatter")
-        return
-    except ImportError:
-        logger.info("document_formatter module not found, using comprehensive fallback method")
-    except Exception as e:
-        logger.warning(f"Error using document_formatter: {e}, using comprehensive fallback method")
-    
-    # Comprehensive fallback method with ALL functionality
-    try:
-        from docx import Document
-        from docx.shared import Inches, Pt
-        from docx.enum.section import WD_SECTION
-        from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
-        from docx.oxml import OxmlElement
-        from docx.oxml.ns import qn
-        
-        # Open the document for post-processing
-        doc = Document(doc_path)
-        
-        # Fix margins for all sections (prevents margin slip)
-        for section in doc.sections:
-            # Use 1.0" top/bottom for header/footer space
-            section.top_margin = Inches(1.0)
-            section.bottom_margin = Inches(1.0)
-            section.left_margin = Inches(0.75)
-            section.right_margin = Inches(0.75)
-            
-            # Set header/footer distances to prevent overlap with content
-            section.header_distance = Inches(0.5)
-            section.footer_distance = Inches(0.5)
-            
-            # Ensure consistent page size
-            section.page_height = Inches(11)
-            section.page_width = Inches(8.5)
-            
-            # Remove unnecessary section breaks that cause blank pages
-            # Keep first section as is, make others continuous
-            if section != doc.sections[0]:
-                section.start_type = WD_SECTION.CONTINUOUS
-        
-        # Fix header/footer alignment to prevent gradient sliding
-        for section in doc.sections:
-            # Fix header alignment
-            header = section.header
-            for paragraph in header.paragraphs:
-                paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
-                paragraph_format = paragraph.paragraph_format
-                paragraph_format.left_indent = Inches(0)
-                paragraph_format.right_indent = Inches(0)
-                
-            # Fix footer alignment  
-            footer = section.footer
-            for paragraph in footer.paragraphs:
-                paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
-                paragraph_format = paragraph.paragraph_format
-                paragraph_format.left_indent = Inches(0)
-                paragraph_format.right_indent = Inches(0)
-        
-        # Remove empty paragraphs that cause blank pages
-        paragraphs_to_delete = []
-        consecutive_empty = 0
-        
-        for i, paragraph in enumerate(doc.paragraphs):
-            # Check if paragraph is effectively empty
-            text = paragraph.text.strip()
-            
-            if not text:
-                # Check if it has no runs with images either
-                has_content = False
-                for run in paragraph.runs:
-                    if run.text.strip():
-                        has_content = True
-                        break
-                    # Check for embedded objects (images)
-                    if hasattr(run, '_element') and run._element.xpath('.//w:drawing'):
-                        has_content = True
-                        break
-                
-                if not has_content:
-                    consecutive_empty += 1
-                    # Keep single empty paragraphs for spacing, remove multiple consecutive ones
-                    if consecutive_empty > 1:
-                        paragraphs_to_delete.append(paragraph)
-            else:
-                consecutive_empty = 0
-        
-        # Delete excessive empty paragraphs
-        for paragraph in paragraphs_to_delete:
-            try:
-                p = paragraph._element
-                p.getparent().remove(p)
-                logger.debug("Removed empty paragraph")
-            except:
-                pass  # Paragraph might already be removed
-        
-        # Fix spacing between paragraphs
-        for paragraph in doc.paragraphs:
-            if paragraph.text.strip():  # Only for non-empty paragraphs
-                paragraph_format = paragraph.paragraph_format
-                
-                # Consistent spacing
-                paragraph_format.space_after = Pt(6)  # Reduced from default
-                paragraph_format.space_before = Pt(6)  # Reduced from default
-                
-                # Ensure single line spacing with slight increase for readability
-                paragraph_format.line_spacing = 1.15
-                
-                # Remove excessive indentation that might cause margin issues
-                if paragraph_format.left_indent and paragraph_format.left_indent > Inches(0.5):
-                    paragraph_format.left_indent = Inches(0)
-                if paragraph_format.right_indent and paragraph_format.right_indent > Inches(0.5):
-                    paragraph_format.right_indent = Inches(0)
-        
-        # Remove unnecessary page breaks
-        for paragraph in doc.paragraphs:
-            if hasattr(paragraph, '_element'):
-                # Check for page breaks
-                page_breaks = paragraph._element.xpath('.//w:br[@w:type="page"]')
-                if page_breaks:
-                    # Check if this paragraph has actual content
-                    if not paragraph.text.strip():
-                        # Remove unnecessary page break
-                        for br in page_breaks:
-                            br.getparent().remove(br)
-                            logger.debug("Removed unnecessary page break")
-        
-        # Handle tables to prevent margin issues
-        for table in doc.tables:
-            table.autofit = True
-            # Set table alignment to center
-            table.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-            
-            # Fix table properties to prevent overflow
-            tbl = table._element
-            tblPr = tbl.xpath('.//w:tblPr')[0] if tbl.xpath('.//w:tblPr') else tbl.add_tblPr()
-            
-            # Set table width to auto
-            tblW = OxmlElement('w:tblW')
-            tblW.set(qn('w:type'), 'auto')
-            tblW.set(qn('w:w'), '0')
-            
-            # Remove any existing width settings
-            for existing_tblW in tblPr.xpath('.//w:tblW'):
-                tblPr.remove(existing_tblW)
-            
-            tblPr.append(tblW)
-            
-            # Ensure table doesn't exceed margins
-            for row in table.rows:
-                for cell in row.cells:
-                    # Set cell margins
-                    tc = cell._element
-                    tcPr = tc.get_or_add_tcPr()
-                    
-                    # Remove any existing margins
-                    for tcMar in tcPr.xpath('.//w:tcMar'):
-                        tcPr.remove(tcMar)
-                    
-                    # Add consistent small margins
-                    tcMar = OxmlElement('w:tcMar')
-                    for margin_type in ['top', 'left', 'bottom', 'right']:
-                        margin = OxmlElement(f'w:{margin_type}')
-                        margin.set(qn('w:w'), '50')  # Small margin
-                        margin.set(qn('w:type'), 'dxa')
-                        tcMar.append(margin)
-                    tcPr.append(tcMar)
-                    
-                    # Fix cell paragraph spacing
-                    for paragraph in cell.paragraphs:
-                        paragraph.paragraph_format.space_after = Pt(3)
-                        paragraph.paragraph_format.space_before = Pt(3)
-                        paragraph.paragraph_format.line_spacing = 1.0
-        
-        # Save the fixed document
-        doc.save(doc_path)
-        logger.info(f"✅ Post-processing complete: fixed margins, removed blank pages, aligned headers/footers")
-        
-    except Exception as e:
-        logger.error(f"Error during post-processing: {e}")
-        # Don't fail the entire process if post-processing fails
-        logger.info("Document generated but post-processing failed - output may have formatting issues")
 
 
 def _attach_sabre_recaps(ctx: Dict[str, Any]) -> None:
@@ -544,10 +332,10 @@ def _attach_sabre_recaps(ctx: Dict[str, Any]) -> None:
         # Generate recap with markdown cleaning enabled
         recap = maker.generate_recap(md, clean_markdown=True)
         
-        # Additional cleanup for formatting
+        # Additional cleanup for HTML formatting
         recap = recap.replace('\r\n', '\n').replace('\r', '\n')
         
-        # Ensure proper paragraph breaks
+        # Ensure proper paragraph breaks for HTML
         paragraphs = recap.split('\n\n')
         cleaned_paragraphs = [p.strip() for p in paragraphs if p.strip()]
         recap = '\n\n'.join(cleaned_paragraphs)
@@ -627,14 +415,13 @@ def _log_recap_summary(ctx: Dict[str, Any], output_file: Path) -> None:
     logger.info(f"League: {ctx.get('LEAGUE_NAME', 'Unknown')}")
     logger.info(f"Output: {output_file}")
     
-    # Count embedded images
-    image_count = sum(1 for key in ctx if 'LOGO' in key and hasattr(ctx[key], '__class__') and 'InlineImage' in str(ctx[key].__class__))
+    # Count logo paths found
+    image_count = sum(1 for key in ctx if 'LOGO' in key and ctx[key] and ctx[key] != "")
     
-    logger.info(f"\n✅ Images embedded: {image_count}")
+    logger.info(f"\n✅ Logo paths prepared: {image_count}")
     logger.info("✅ Using team_logos.json for all mappings")
-    logger.info("✅ Margins fixed")
-    logger.info("✅ Blank pages removed")
-    logger.info("✅ Formatting cleaned")
+    logger.info("✅ CSS handles layout and formatting")
+    logger.info("✅ PDF generated with precise control")
     logger.info("="*60 + "\n")
 
 
@@ -678,19 +465,55 @@ def verify_logo_mappings(json_file: str = "team_logos.json"):
     return all_good
 
 
+def check_dependencies():
+    """Check that required packages are installed"""
+    missing = []
+    
+    try:
+        import jinja2
+    except ImportError:
+        missing.append("jinja2")
+    
+    try:
+        import pdfkit
+    except ImportError:
+        missing.append("pdfkit")
+    
+    if missing:
+        print(f"❌ Missing required packages: {', '.join(missing)}")
+        print("Install with: pip install " + " ".join(missing))
+        return False
+    
+    # Check for wkhtmltopdf
+    try:
+        pdfkit.configuration()
+    except Exception as e:
+        print("❌ wkhtmltopdf not found. Install it:")
+        print("  - Windows: Download from https://wkhtmltopdf.org/downloads.html")
+        print("  - Mac: brew install wkhtmltopdf")
+        print("  - Linux: sudo apt-get install wkhtmltopdf")
+        return False
+    
+    print("✅ All dependencies are available")
+    return True
+
+
 if __name__ == "__main__":
     import sys
     
     if len(sys.argv) > 1 and sys.argv[1] == "verify":
         verify_logo_mappings()
+    elif len(sys.argv) > 1 and sys.argv[1] == "deps":
+        check_dependencies()
     else:
-        print("Weekly Recap Builder - Using team_logos.json")
+        print("Weekly Recap Builder - HTML/PDF VERSION")
         print("Features:")
-        print("  ✅ Loads all logos from team_logos.json")
-        print("  ✅ Proper image embedding")
-        print("  ✅ Removes blank pages")
-        print("  ✅ Fixes margin issues")
-        print("  ✅ Cleans formatting")
+        print("  ✅ Generates HTML from Jinja2 template")
+        print("  ✅ Converts to PDF with precise layout")
+        print("  ✅ Loads logos from team_logos.json")
+        print("  ✅ CSS handles all formatting")
+        print("  ✅ No more layout shift issues")
         print("\nUsage:")
         print("  Called from build_gazette.py")
         print("  Or verify logos: python weekly_recap.py verify")
+        print("  Or check deps: python weekly_recap.py deps")
