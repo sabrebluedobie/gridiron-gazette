@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional, List
 from jinja2 import Environment, FileSystemLoader
 
 # Try WeasyPrint first, fall back to pdfkit
-USE_WEASYPRINT = False
+USE_WEASYPRINT = True
 try:
     from weasyprint import HTML, CSS
     USE_WEASYPRINT = True
