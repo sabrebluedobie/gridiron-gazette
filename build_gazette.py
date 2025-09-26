@@ -130,7 +130,6 @@ def main(argv: list[str] | None = None) -> None:
     # Verify setup if requested
     if args.verify:
         if verify_environment():
-            import weekly_recap
             weekly_recap.verify_setup()
         sys.exit(0)
     
