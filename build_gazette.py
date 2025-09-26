@@ -94,27 +94,31 @@ def verify_environment():
     except ImportError:
         issues.append("jinja2 not installed (pip install jinja2)")
     
+try:
+    import pdfkit
+except ImportError:
+    issues.append("pdfkit not installed (pip install pdfkit)")
+
+# Check for PDF generation capability
+if not issues:  # Only check if we can generate PDFs
     try:
-        import pdfkit
+        import weasyprint
+        # WeasyPrint is available
     except ImportError:
-        issues.append("pdfkit not installed (pip install pdfkit)")
-    
-    # Check for wkhtmltopdf
-    if not issues:  # Only check if pdfkit is available
         try:
             import pdfkit
             pdfkit.configuration()
         except Exception:
-            issues.append("wkhtmltopdf not installed (see README for installation)")
-    
-    if issues:
-        log.error("Setup issues found:")
-        for issue in issues:
-            log.error(f"  ❌ {issue}")
-        return False
-    
-    log.info("✅ Environment verification passed")
-    return True
+            issues.append("No PDF generator found. Install weasyprint: pip install weasyprint")
+
+if issues:
+    log.error("Setup issues found:")
+    for issue in issues:
+        log.error(f"  ❌ {issue}")
+    return False
+
+log.info("✅ Environment verification passed")
+return True
 
 
 def main(argv: list[str] | None = None) -> None:

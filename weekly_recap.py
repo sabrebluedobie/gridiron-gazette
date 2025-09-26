@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional, List
 
 # HTML/PDF generation
 from jinja2 import Environment, FileSystemLoader
-import pdfkit
+from weasyprint import HTML, CSS
 
 import gazette_data
 from storymaker import (
@@ -118,7 +118,7 @@ def _render_html_to_pdf(template_path: str, output_pattern: str, ctx: Dict[str, 
     html_content = template.render(**ctx)
     
     # Convert to PDF with WeasyPrint
-    HTML(string=html_content).write_pdf(output_path)
+    HTML(string=html_content).write_pdf(str(output_file))
     logger.info(f"✅ Generated PDF: {output_file}")
     
     return str(output_file)
@@ -337,17 +337,6 @@ def verify_setup():
                 print(f"  ... and {len(missing)-5} more")
     else:
         print("⚠️  team_logos.json not found (logos will be skipped)")
-    
-    # Check for wkhtmltopdf
-    try:
-        import pdfkit
-        pdfkit.configuration()
-        print("✅ wkhtmltopdf is installed")
-    except:
-        print("❌ wkhtmltopdf not found! Install it:")
-        print("  Mac: brew install wkhtmltopdf")
-        print("  Windows: Download from https://wkhtmltopdf.org/downloads.html")
-        print("  Linux: sudo apt-get install wkhtmltopdf")
         all_good = False
     
     # Check for required Python packages
