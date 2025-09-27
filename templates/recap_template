@@ -28,31 +28,35 @@
         
         /* Base document */
         html {
-            background: #fff6ec;
+            background: linear-gradient(135deg, #fff6ec 0%, #f5f0e8 100%);
         }
         
         body {
-            font-family: 'Calibri', 'Arial', sans-serif;
+            font-family: 'Formula', 'Helvetica Neue', 'Arial', sans-serif;
             font-size: 11pt;
             line-height: 1.6;
-            color: #000;
-            background: #fff6ec;
+            color: #07212e;
+            background: linear-gradient(135deg, #ffffff 0%, #fff6ec 100%);
             max-width: 8.5in;
             margin: 0 auto;
             position: relative;
             min-height: 11in;
             padding-top: 0;
+            box-shadow: 0 0 30px rgba(7, 33, 46, 0.1);
         }
         
         /* Document container with padding for header/footer */
         .document-wrapper {
-            padding: 1.25in 1in 1in 1in;
+            padding: 1.4in 1in 1.2in 1in;
             margin-top: 0;
+            background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+            border-radius: 0 0 15pt 15pt;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1);
         }
         
         @media screen {
             .document-wrapper {
-                margin-top: 0.5in;
+                margin-top: 0.6in;
             }
         }
         
@@ -62,9 +66,10 @@
             top: 0;
             left: 0;
             right: 0;
-            min-height: 0.85in;
-            padding: 0.25in 1in 0.1in;
-            background: linear-gradient(to right, #fff6ec, #042d4d);
+            min-height: 0.95in;
+            padding: 0.25in 1in 0.15in;
+            background: linear-gradient(135deg, #07212e 0%, #406a9b 50%, #86929b 100%);
+            box-shadow: 0 4px 20px rgba(7, 33, 46, 0.25);
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
@@ -72,6 +77,18 @@
             font-size: 11pt;
             color: #ffffff;
             z-index: 100;
+            border-bottom: 3px solid #915f55;
+        }
+        
+        .page-header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(45deg, rgba(255,246,236,0.1) 0%, transparent 100%);
+            pointer-events: none;
         }
         
         .page-header > span {
@@ -79,8 +96,10 @@
             display: flex;
             align-items: center;
             padding-bottom: 0.1in;
-            color: #042d4d;
+            color: #fff6ec;
             font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+            font-size: 1.1rem;
         }
         
         .page-header .right-header {
@@ -90,21 +109,25 @@
         }
         
         .page-header .right-header .header-title {
-            font-size: 2rem;
+            font-size: 2.2rem;
             display: block;
             padding-bottom: 0.5pt;
-            border-bottom: 1pt solid #ffffff;
+            border-bottom: 2pt solid rgba(255,246,236,0.8);
             margin-bottom: 0.5pt;
-            color: #ffffff;
+            color: #fff6ec;
+            text-shadow: 2px 2px 6px rgba(0, 0, 0, 0.4);
+            font-weight: 700;
+            letter-spacing: 1pt;
         }
         
         .page-header .right-header .header-tagline {
             font-family: 'american-typewriter', 'Courier Prime', 'Courier New', monospace;
-            font-size: 0.75rem;
-            font-style: normal;
+            font-size: 0.8rem;
+            font-style: italic;
             font-weight: 400;
-            color: #ffffff;
-            letter-spacing: -0.3pt;
+            color: rgba(255, 246, 236, 0.9);
+            letter-spacing: 0.2pt;
+            text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.3);
         }
         
         @media print {
@@ -116,64 +139,107 @@
         /* Main title section */
         .title-section {
             text-align: center;
-            margin-top: -15pt;
-            margin-bottom: 20pt;
-            padding-bottom: 8pt;
-            border-bottom: 3pt double #042d4d;
+            margin-top: -10pt;
+            margin-bottom: 25pt;
+            padding: 20pt;
+            background: linear-gradient(135deg, #ffffff 0%, #fff6ec 100%);
+            border-radius: 12pt;
+            box-shadow: 0 8px 25px rgba(7, 33, 46, 0.1);
+            border: 1pt solid #86929b;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .title-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4pt;
+            background: linear-gradient(90deg, #915f55 0%, #406a9b 50%, #915f55 100%);
         }
         
         /* Week header - now the main title */
         h1 {
             font-family: 'Graduate', sans-serif;
-            font-size: 28pt;
-            color: #042d4d;
+            font-size: 32pt;
+            color: #07212e;
             text-align: center;
-            margin: 0 0 4pt 0;
+            margin: 0 0 8pt 0;
             text-transform: uppercase;
-            letter-spacing: 1pt;
-            padding-bottom: 4pt;
-            border-bottom: 2pt solid #042d4d;
+            letter-spacing: 2pt;
+            padding-bottom: 8pt;
+            border-bottom: 3pt solid #86929b;
+            text-shadow: 2px 2px 4px rgba(7, 33, 46, 0.1);
+            font-weight: 700;
         }
         
         .gazette-tagline {
             font-family: 'american-typewriter', 'Courier Prime', 'Courier New', monospace;
-            font-size: 1.0rem;
-            font-style: normal;
+            font-size: 1.1rem;
+            font-style: italic;
             font-weight: 400;
-            color: #666;
-            margin-top: 4pt;
+            color: #915f55;
+            margin-top: 8pt;
             margin-bottom: 0;
+            text-shadow: 1px 1px 2px rgba(7, 33, 46, 0.1);
         }
         
         /* Intro paragraph */
         .intro-paragraph {
-            font-size: 11pt;
-            line-height: 1.6;
-            margin-bottom: 20pt;
+            font-size: 12pt;
+            line-height: 1.7;
+            margin-bottom: 25pt;
             text-align: left;
+            color: #07212e;
+            background: linear-gradient(135deg, #ffffff 0%, #fff6ec 100%);
+            padding: 18pt;
+            border-radius: 8pt;
+            border-left: 4pt solid #406a9b;
+            box-shadow: 0 4px 15px rgba(7, 33, 46, 0.08);
+            font-weight: 500;
         }
         
         /* Section headers */
         h2 {
             font-family: 'Graduate', sans-serif;
-            font-size: 18pt;
-            color: #8B4513;
-            border-bottom: 2pt solid #8B4513;
-            padding-bottom: 4pt;
-            margin-top: 24pt;
-            margin-bottom: 16pt;
+            font-size: 20pt;
+            color: #915f55;
+            border-bottom: 3pt solid #915f55;
+            padding: 15pt 20pt 8pt;
+            margin-top: 30pt;
+            margin-bottom: 20pt;
             text-transform: uppercase;
-            letter-spacing: 0.5pt;
+            letter-spacing: 1pt;
+            font-weight: 700;
+            background: linear-gradient(135deg, #ffffff 0%, #fff6ec 100%);
+            border-radius: 8pt 8pt 0 0;
+            box-shadow: 0 4px 15px rgba(7, 33, 46, 0.1);
+            position: relative;
+        }
+        
+        h2::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3pt;
+            background: linear-gradient(90deg, #915f55 0%, #406a9b 100%);
+            border-radius: 8pt 8pt 0 0;
         }
         
         /* Matchup headers */
         h3 {
-            font-family: 'Graduate', sans-serif;
-            font-size: 14pt;
-            color: #2c5530;
-            margin-top: 20pt;
-            margin-bottom: 12pt;
-            letter-spacing: 0.3pt;
+            font-family: 'american-typewriter', 'Courier Prime', 'Courier New', monospace;
+            font-size: 16pt;
+            color: #07212e;
+            margin-top: 25pt;
+            margin-bottom: 15pt;
+            letter-spacing: 0.5pt;
+            font-weight: 600;
+            text-shadow: 1px 1px 2px rgba(7, 33, 46, 0.1);
         }
         
         /* Matchup container */
@@ -184,82 +250,144 @@
         
         /* Team matchup display box */
         .matchup-box {
-            background: #fefaf6;
-            border: 1pt solid #ddd;
-            border-radius: 4pt;
-            padding: 12pt;
-            margin-bottom: 12pt;
+            background: linear-gradient(135deg, #ffffff 0%, #fff6ec 100%);
+            border: 1pt solid #86929b;
+            border-radius: 12pt;
+            padding: 18pt;
+            margin-bottom: 15pt;
+            box-shadow: 0 6px 20px rgba(7, 33, 46, 0.08);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .matchup-box::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3pt;
+            background: linear-gradient(90deg, #406a9b 0%, #915f55 50%, #406a9b 100%);
         }
         
         /* Team row in matchup */
         .team-row {
             display: flex;
             align-items: center;
-            padding: 8pt 0;
+            padding: 12pt 0;
+            transition: all 0.3s ease;
+        }
+        
+        .team-row:hover {
+            transform: translateX(5pt);
         }
         
         .team-logo {
-            width: 42pt;
-            height: 42pt;
-            margin-right: 12pt;
+            width: 48pt;
+            height: 48pt;
+            margin-right: 15pt;
             object-fit: contain;
-            border-radius: 4pt;
+            border-radius: 8pt;
+            box-shadow: 0 3px 10px rgba(7, 33, 46, 0.15);
+            border: 2pt solid #fff6ec;
         }
         
         .team-name {
-            font-weight: bold;
-            font-size: 12pt;
+            font-weight: 700;
+            font-size: 13pt;
             text-transform: uppercase;
             flex: 1;
+            color: #07212e;
+            text-shadow: 1px 1px 2px rgba(7, 33, 46, 0.1);
+            letter-spacing: 0.5pt;
         }
         
         .team-score {
-            font-size: 14pt;
-            font-weight: bold;
-            color: #2c5530;
-            text-decoration: underline;
+            font-size: 18pt;
+            font-weight: 800;
+            color: #406a9b;
+            padding: 8pt 15pt;
+            background: linear-gradient(135deg, rgba(64, 106, 155, 0.1) 0%, rgba(255, 246, 236, 0.8) 100%);
+            border-radius: 8pt;
+            border: 2pt solid rgba(64, 106, 155, 0.2);
+            text-shadow: 1px 1px 3px rgba(7, 33, 46, 0.1);
         }
         
         /* VS divider */
         .vs-divider {
             text-align: center;
-            font-weight: bold;
-            font-size: 11pt;
-            padding: 4pt 0;
-            color: #666;
+            font-weight: 700;
+            font-size: 12pt;
+            padding: 8pt 0;
+            color: #915f55;
+            text-shadow: 1px 1px 2px rgba(7, 33, 46, 0.1);
+            letter-spacing: 2pt;
         }
         
         /* Game narrative */
         .game-narrative {
-            line-height: 1.6;
+            line-height: 1.7;
             text-align: justify;
-            margin: 12pt 0;
-            font-size: 11pt;
+            margin: 15pt 0;
+            font-size: 11.5pt;
+            color: #07212e;
+            background: linear-gradient(135deg, #ffffff 0%, #fff6ec 100%);
+            padding: 15pt;
+            border-radius: 8pt;
+            border-left: 4pt solid #406a9b;
+            box-shadow: 0 3px 10px rgba(7, 33, 46, 0.05);
         }
         
         /* Stats Spotlight box */
         .stats-spotlight {
-            background: #fefaf6;
-            border-left: 3pt solid #8B4513;
-            padding: 12pt;
-            margin: 16pt 0;
+            background: linear-gradient(135deg, #fff6ec 0%, #f5f0e8 100%);
+            border-left: 4pt solid #915f55;
+            border-radius: 8pt;
+            padding: 18pt;
+            margin: 20pt 0;
+            box-shadow: 0 6px 20px rgba(145, 95, 85, 0.15);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .stats-spotlight::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 100pt;
+            height: 100pt;
+            background: radial-gradient(circle, rgba(145, 95, 85, 0.1) 0%, transparent 70%);
+            transform: translate(30pt, -30pt);
         }
         
         .stats-spotlight h4 {
             font-family: 'Graduate', sans-serif;
-            font-size: 12pt;
-            color: #8B4513;
-            margin-bottom: 8pt;
-            letter-spacing: 0.3pt;
+            font-size: 14pt;
+            color: #915f55;
+            margin-bottom: 12pt;
+            letter-spacing: 0.5pt;
+            text-transform: uppercase;
+            font-weight: 700;
+            text-shadow: 1px 1px 2px rgba(7, 33, 46, 0.1);
         }
         
         .stats-table {
             width: 100%;
             border-collapse: collapse;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 6pt;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(7, 33, 46, 0.1);
         }
         
         .stats-table tr {
-            border-bottom: 1pt solid #e0e0e0;
+            border-bottom: 1pt solid rgba(134, 146, 155, 0.3);
+            transition: background-color 0.3s ease;
+        }
+        
+        .stats-table tr:hover {
+            background-color: rgba(64, 106, 155, 0.05);
         }
         
         .stats-table tr:last-child {
@@ -267,70 +395,124 @@
         }
         
         .stats-table td {
-            padding: 6pt 8pt;
+            padding: 10pt 12pt;
             vertical-align: top;
             font-size: 11pt;
         }
         
         .stats-table td:first-child {
-            font-weight: bold;
+            font-weight: 700;
             width: 40%;
-            color: #333;
+            color: #07212e;
+            background: linear-gradient(135deg, rgba(64, 106, 155, 0.1) 0%, rgba(255, 246, 236, 0.5) 100%);
+        }
+        
+        .stats-table td:last-child {
+            color: #07212e;
+            font-weight: 500;
         }
         
         /* Awards section */
         .awards-section {
-            margin-top: 30pt;
-            background: #fff8dc;
-            border: 2pt solid #8B4513;
-            border-radius: 4pt;
-            padding: 16pt;
+            margin-top: 35pt;
+            background: linear-gradient(135deg, #fff6ec 0%, #f5f0e8 100%);
+            border: 2pt solid #915f55;
+            border-radius: 12pt;
+            padding: 25pt;
             page-break-inside: avoid;
+            box-shadow: 0 8px 25px rgba(145, 95, 85, 0.2);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .awards-section::before {
+            content: '';
+            position: absolute;
+            top: -50pt;
+            right: -50pt;
+            width: 150pt;
+            height: 150pt;
+            background: radial-gradient(circle, rgba(64, 106, 155, 0.1) 0%, transparent 70%);
         }
         
         .awards-section h2 {
             font-family: 'Graduate', sans-serif;
             text-align: center;
             border: none;
-            margin-bottom: 16pt;
-            color: #8B4513;
+            margin-bottom: 20pt;
+            color: #915f55;
+            text-shadow: 2px 2px 4px rgba(7, 33, 46, 0.1);
+            font-size: 22pt;
+            font-weight: 700;
         }
         
         .award {
-            margin-bottom: 12pt;
-            font-size: 11pt;
+            margin-bottom: 18pt;
+            font-size: 12pt;
+            padding: 12pt;
+            background: rgba(255, 255, 255, 0.7);
+            border-radius: 8pt;
+            border-left: 4pt solid #406a9b;
+            box-shadow: 0 3px 10px rgba(7, 33, 46, 0.05);
         }
         
         .award-title {
-            font-weight: bold;
-            color: #8B4513;
+            font-family: 'american-typewriter', 'Courier Prime', 'Courier New', monospace;
+            font-weight: 700;
+            color: #915f55;
+            text-transform: uppercase;
+            letter-spacing: 0.5pt;
+            font-size: 11pt;
         }
         
         .award-winner {
-            font-weight: normal;
+            font-weight: 600;
+            color: #07212e;
+            font-size: 12pt;
         }
         
         /* Document footer */
         .document-footer {
             text-align: center;
-            margin-top: 30pt;
-            padding-top: 12pt;
-            border-top: 1pt solid #ccc;
+            margin-top: 35pt;
+            padding: 20pt;
+            border-top: 2pt solid #86929b;
             font-style: italic;
-            color: #666;
-            font-size: 10pt;
+            color: #915f55;
+            font-size: 11pt;
+            background: linear-gradient(135deg, #fff6ec 0%, #f5f0e8 100%);
+            border-radius: 8pt;
+            box-shadow: 0 3px 10px rgba(7, 33, 46, 0.05);
         }
         
         /* Running footer for pages */
         .page-footer {
             position: fixed;
-            bottom: 0.5in;
+            bottom: 0;
             left: 0;
             right: 0;
             text-align: center;
             font-size: 10pt;
-            color: #666;
-            background: #fff6ec;
+            color: #fff6ec;
+            background: linear-gradient(135deg, #07212e 0%, #406a9b 50%, #86929b 100%);
+            min-height: 0.8in;
+            padding: 0.3in 1in;
+            box-shadow: 0 -4px 15px rgba(7, 33, 46, 0.25);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            border-top: 3px solid #915f55;
+        }
+        
+        .page-footer::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(45deg, rgba(255,246,236,0.1) 0%, transparent 100%);
+            pointer-events: none;
         }
         
         @media print {
@@ -395,7 +577,7 @@
                     <img src="{{ MATCHUP1_HOME_LOGO }}" alt="{{ MATCHUP1_HOME }}" class="team-logo">
                     {% endif %}
                     <div class="team-name smallcaps">
-                        {{ MATCHUP1_HOME }} –
+                        {{ MATCHUP1_HOME }} —
                     </div>
                     <div class="team-score">
                         {{ MATCHUP1_HS }}
@@ -410,7 +592,7 @@
                     <img src="{{ MATCHUP1_AWAY_LOGO }}" alt="{{ MATCHUP1_AWAY }}" class="team-logo">
                     {% endif %}
                     <div class="team-name smallcaps">
-                        {{ MATCHUP1_AWAY }} –
+                        {{ MATCHUP1_AWAY }} —
                     </div>
                     <div class="team-score">
                         {{ MATCHUP1_AS }}
@@ -466,7 +648,7 @@
                     <img src="{{ MATCHUP2_HOME_LOGO }}" alt="{{ MATCHUP2_HOME }}" class="team-logo">
                     {% endif %}
                     <div class="team-name smallcaps">
-                        {{ MATCHUP2_HOME }} –
+                        {{ MATCHUP2_HOME }} —
                     </div>
                     <div class="team-score">
                         {{ MATCHUP2_HS }}
@@ -481,7 +663,7 @@
                     <img src="{{ MATCHUP2_AWAY_LOGO }}" alt="{{ MATCHUP2_AWAY }}" class="team-logo">
                     {% endif %}
                     <div class="team-name smallcaps">
-                        {{ MATCHUP2_AWAY }} –
+                        {{ MATCHUP2_AWAY }} —
                     </div>
                     <div class="team-score">
                         {{ MATCHUP2_AS }}
@@ -534,7 +716,7 @@
                     <img src="{{ MATCHUP3_HOME_LOGO }}" alt="{{ MATCHUP3_HOME }}" class="team-logo">
                     {% endif %}
                     <div class="team-name smallcaps">
-                        {{ MATCHUP3_HOME }} –
+                        {{ MATCHUP3_HOME }} —
                     </div>
                     <div class="team-score">
                         {{ MATCHUP3_HS }}
@@ -548,7 +730,7 @@
                     <img src="{{ MATCHUP3_AWAY_LOGO }}" alt="{{ MATCHUP3_AWAY }}" class="team-logo">
                     {% endif %}
                     <div class="team-name smallcaps">
-                        {{ MATCHUP3_AWAY }} –
+                        {{ MATCHUP3_AWAY }} —
                     </div>
                     <div class="team-score">
                         {{ MATCHUP3_AS }}
@@ -630,9 +812,9 @@
     </div>
     
     <!-- Page footer with gradient (appears on every page) -->
-    <div class="page-footer" style="position: fixed; bottom: 0; left: 0; right: 0; width: 100%; min-height: 0.75in; padding: 0.25in 1in; background: linear-gradient(to right, #fff6ec, #042d4d); text-align: center; z-index: 100;">
-        <div style="color: #ffffff; font-size: 10pt; font-weight: bold;">Page 1</div>
-        <div style="color: #ffffff; font-size: 9pt; margin-top: 4pt;">{{ SPONSOR_LOGO }} • The Gridiron Gazette • Week {{ WEEK_NUMBER }}</div>
+    <div class="page-footer">
+        <div style="color: #fff6ec; font-size: 11pt; font-weight: 700; text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.3);">Page 1</div>
+        <div style="color: rgba(255, 246, 236, 0.9); font-size: 10pt; margin-top: 6pt; text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);">{{ SPONSOR_LOGO }} • The Gridiron Gazette • Week {{ WEEK_NUMBER }}</div>
     </div>
 </body>
 </html>
