@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+.venv/
+*.pyc
+
+# Local secrets / keys
+.env
+*.env
+creds.json
+*.key.json
+keys/
+.env
+.env
+
+# build artifacts
+recaps/
+*.pdf
+
+leagues.local.json
+.env.local
+*.docx

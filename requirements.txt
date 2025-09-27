@@ -1,0 +1,30 @@
+# Core HTML/PDF generation
+jinja2==3.1.4
+pdfkit==1.0.0
+
+# ESPN API
+espn-api==0.45.1
+
+# LLM for Sabre commentary (optional)
+openai==1.42.0
+
+# Image processing
+pillow==10.4.0
+
+# Environment and config
+python-dotenv==1.0.1
+PyYAML==6.0.2
+
+# HTTP requests
+requests==2.32.3
+
+# Existing DOCX support (for compatibility)
+docxtpl==0.16.7
+python-docx==1.1.2
+docxcompose==1.4.0
+lxml==5.3.0
+
+# Optional for advanced features
+google-api-python-client==2.145.0
+google-auth==2.33.0
+google-auth-oauthlib==1.2.1

@@ -1,0 +1,55 @@
+name: Generate Gridiron Gazette
+
+on:
+  workflow_dispatch:  # Manual trigger
+    inputs:
+      week:
+        description: 'Week number'
+        required: true
+        default: '1'
+      year:
+        description: 'Year'
+        required: true
+        default: '2025'
+  schedule:
+    - cron: '0 10 * * 2'  # Tuesdays at 10 AM
+
+jobs:
+  generate-gazette:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Generate Gazette
+      env:
+        ESPN_S2: ${{ secrets.ESPN_S2 }}
+        SWID: ${{ secrets.SWID }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        LEAGUE_ID: ${{ secrets.LEAGUE_ID }}
+        YEAR: ${{ github.event.inputs.year || '2025' }}
+        WEEK_NUMBER: ${{ github.event.inputs.week || github.run_number }}
+      run: |
+        if [ -z "${ESPN_S2}" ]; then echo "Warning: ESPN_S2 secret is not set."; fi
+        python build_gazette.py
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: gazette-week-${{ github.event.inputs.week }}
+        path: |
+          output/*.docx
+          output/*.pdf
+    
+    - name: Notify completion
+      if: always()
+      run: |
+        echo "Gazette generation completed!"

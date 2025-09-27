@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ LEAGUE_LOGO }} - Week {{ WEEK_NUMBER }}</title>
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Graduate&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+    
+    <!-- Adobe Fonts for American Typewriter -->
+    <link rel="stylesheet" href="https://use.typekit.net/oov2wcw.css">
+    
+    <style>
+        /* Reset */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        /* Page setup for PDF */
+        @page {
+            size: letter;
+            margin: 0.75in 1in;
+        }
+        
+        /* Base document */
+        html {
+            background: linear-gradient(135deg, #fff6ec 0%, #f5f0e8 100%);
+        }
+        
+        body {
+            font-family: 'Formula', 'Helvetica Neue', 'Arial', sans-serif;
+            font-size: 11pt;
+            line-height: 1.6;
+            color: #07212e;
+            background: linear-gradient(135deg, #ffffff 0%, #fff6ec 100%);
+            max-width: 8.5in;
+            margin: 0 auto;
+            position: relative;
+            min-height: 11in;
+            padding-top: 0;
+            box-shadow: 0 0 30px rgba(7, 33, 46, 0.1);
+        }
+        
+        /* Document container with padding for header/footer */
+        .document-wrapper {
+            padding: 1.4in 1in 1.2in 1in;
+            margin-top: 0;
+            background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+            border-radius: 0 0 15pt 15pt;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1);
+        }
+        
+        @media screen {
+            .document-wrapper {
+                margin-top: 0.6in;
+            }
+        }
+        
+        /* Running header */
+        .page-header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            min-height: 0.95in;
+            padding: 0.25in 1in 0.15in;
+            background: linear-gradient(135deg, #07212e 0%, #406a9b 50%, #86929b 100%);
+            box-shadow: 0 4px 20px rgba(7, 33, 46, 0.25);
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            font-family: 'Graduate', sans-serif;
+            font-size: 11pt;
+            color: #ffffff;
+            z-index: 100;
+            border-bottom: 3px solid #915f55;
+        }
+        
+        .page-header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(45deg, rgba(255,246,236,0.1) 0%, transparent 100%);
+            pointer-events: none;
+        }
+        
+        .page-header > span {
+            /* Left side - league logo */
+            display: flex;
+            align-items: center;
+            padding-bottom: 0.1in;
+            color: #fff6ec;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+            font-size: 1.1rem;
+        }
+        
+        .page-header .right-header {
+            text-align: right;
+            padding-bottom: 0.1in;
+            line-height: 1.15;
+        }
+        
+        .page-header .right-header .header-title {
+            font-size: 2.2rem;
+            display: block;
+            padding-bottom: 0.5pt;
+            border-bottom: 2pt solid rgba(255,246,236,0.8);
+            margin-bottom: 0.5pt;
+            color: #fff6ec;
+            text-shadow: 2px 2px 6px rgba(0, 0, 0, 0.4);
+            font-weight: 700;
+            letter-spacing: 1pt;
+        }
+        
+        .page-header .right-header .header-tagline {
+            font-family: 'american-typewriter', 'Courier Prime', 'Courier New', monospace;
+            font-size: 0.8rem;
+            font-style: italic;
+            font-weight: 400;
+            color: rgba(255, 246, 236, 0.9);
+            letter-spacing: 0.2pt;
+            text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.3);
+        }
+        
+        @media print {
+            .page-header {
+                position: fixed;
+            }
+        }
+        
+        /* Main title section */
+        .title-section {
+            text-align: center;
+            margin-top: -10pt;
+            margin-bottom: 25pt;
+            padding: 20pt;
+            background: linear-gradient(135deg, #ffffff 0%, #fff6ec 100%);
+            border-radius: 12pt;
+            box-shadow: 0 8px 25px rgba(7, 33, 46, 0.1);
+            border: 1pt solid #86929b;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .title-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4pt;
+            background: linear-gradient(90deg, #915f55 0%, #406a9b 50%, #915f55 100%);
+        }
+        
+        /* Week header - now the main title */
+        h1 {
+            font-family: 'Graduate', sans-serif;
+            font-size: 32pt;
+            color: #07212e;
+            text-align: center;
+            margin: 0 0 8pt 0;
+            text-transform: uppercase;
+            letter-spacing: 2pt;
+            padding-bottom: 8pt;
+            border-bottom: 3pt solid #86929b;
+            text-shadow: 2px 2px 4px rgba(7, 33, 46, 0.1);
+            font-weight: 700;
+        }
+        
+        .gazette-tagline {
+            font-family: 'american-typewriter', 'Courier Prime', 'Courier New', monospace;
+            font-size: 1.1rem;
+            font-style: italic;
+            font-weight: 400;
+            color: #915f55;
+            margin-top: 8pt;
+            margin-bottom: 0;
+            text-shadow: 1px 1px 2px rgba(7, 33, 46, 0.1);
+        }
+        
+        /* Intro paragraph */
+        .intro-paragraph {
+            font-size: 12pt;
+            line-height: 1.7;
+            margin-bottom: 25pt;
+            text-align: left;
+            color: #07212e;
+            background: linear-gradient(135deg, #ffffff 0%, #fff6ec 100%);
+            padding: 18pt;
+            border-radius: 8pt;
+            border-left: 4pt solid #406a9b;
+            box-shadow: 0 4px 15px rgba(7, 33, 46, 0.08);
+            font-weight: 500;
+        }
+        
+        /* Section headers */
+        h2 {
+            font-family: 'Graduate', sans-serif;
+            font-size: 20pt;
+            color: #915f55;
+            border-bottom: 3pt solid #915f55;
+            padding: 15pt 20pt 8pt;
+            margin-top: 30pt;
+            margin-bottom: 20pt;
+            text-transform: uppercase;
+            letter-spacing: 1pt;
+            font-weight: 700;
+            background: linear-gradient(135deg, #ffffff 0%, #fff6ec 100%);
+            border-radius: 8pt 8pt 0 0;
+            box-shadow: 0 4px 15px rgba(7, 33, 46, 0.1);
+            position: relative;
+        }
+        
+        h2::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3pt;
+            background: linear-gradient(90deg, #915f55 0%, #406a9b 100%);
+            border-radius: 8pt 8pt 0 0;
+        }
+        
+        /* Matchup headers */
+        h3 {
+            font-family: 'american-typewriter', 'Courier Prime', 'Courier New', monospace;
+            font-size: 16pt;
+            color: #07212e;
+            margin-top: 25pt;
+            margin-bottom: 15pt;
+            letter-spacing: 0.5pt;
+            font-weight: 600;
+            text-shadow: 1px 1px 2px rgba(7, 33, 46, 0.1);
+        }
+        
+        /* Matchup container */
+        .matchup {
+            margin-bottom: 30pt;
+            page-break-inside: avoid;
+        }
+        
+        /* Team matchup display box */
+        .matchup-box {
+            background: linear-gradient(135deg, #ffffff 0%, #fff6ec 100%);
+            border: 1pt solid #86929b;
+            border-radius: 12pt;
+            padding: 18pt;
+            margin-bottom: 15pt;
+            box-shadow: 0 6px 20px rgba(7, 33, 46, 0.08);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .matchup-box::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3pt;
+            background: linear-gradient(90deg, #406a9b 0%, #915f55 50%, #406a9b 100%);
+        }
+        
+        /* Team row in matchup */
+        .team-row {
+            display: flex;
+            align-items: center;
+            padding: 12pt 0;
+            transition: all 0.3s ease;
+        }
+        
+        .team-row:hover {
+            transform: translateX(5pt);
+        }
+        
+        .team-logo {
+            width: 48pt;
+            height: 48pt;
+            margin-right: 15pt;
+            object-fit: contain;
+            border-radius: 8pt;
+            box-shadow: 0 3px 10px rgba(7, 33, 46, 0.15);
+            border: 2pt solid #fff6ec;
+        }
+        
+        .team-name {
+            font-weight: 700;
+            font-size: 13pt;
+            text-transform: uppercase;
+            flex: 1;
+            color: #07212e;
+            text-shadow: 1px 1px 2px rgba(7, 33, 46, 0.1);
+            letter-spacing: 0.5pt;
+        }
+        
+        .team-score {
+            font-size: 18pt;
+            font-weight: 800;
+            color: #406a9b;
+            padding: 8pt 15pt;
+            background: linear-gradient(135deg, rgba(64, 106, 155, 0.1) 0%, rgba(255, 246, 236, 0.8) 100%);
+            border-radius: 8pt;
+            border: 2pt solid rgba(64, 106, 155, 0.2);
+            text-shadow: 1px 1px 3px rgba(7, 33, 46, 0.1);
+        }
+        
+        /* VS divider */
+        .vs-divider {
+            text-align: center;
+            font-weight: 700;
+            font-size: 12pt;
+            padding: 8pt 0;
+            color: #915f55;
+            text-shadow: 1px 1px 2px rgba(7, 33, 46, 0.1);
+            letter-spacing: 2pt;
+        }
+        
+        /* Game narrative */
+        .game-narrative {
+            line-height: 1.7;
+            text-align: justify;
+            margin: 15pt 0;
+            font-size: 11.5pt;
+            color: #07212e;
+            background: linear-gradient(135deg, #ffffff 0%, #fff6ec 100%);
+            padding: 15pt;
+            border-radius: 8pt;
+            border-left: 4pt solid #406a9b;
+            box-shadow: 0 3px 10px rgba(7, 33, 46, 0.05);
+        }
+        
+        /* Stats Spotlight box */
+        .stats-spotlight {
+            background: linear-gradient(135deg, #fff6ec 0%, #f5f0e8 100%);
+            border-left: 4pt solid #915f55;
+            border-radius: 8pt;
+            padding: 18pt;
+            margin: 20pt 0;
+            box-shadow: 0 6px 20px rgba(145, 95, 85, 0.15);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .stats-spotlight::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 100pt;
+            height: 100pt;
+            background: radial-gradient(circle, rgba(145, 95, 85, 0.1) 0%, transparent 70%);
+            transform: translate(30pt, -30pt);
+        }
+        
+        .stats-spotlight h4 {
+            font-family: 'Graduate', sans-serif;
+            font-size: 14pt;
+            color: #915f55;
+            margin-bottom: 12pt;
+            letter-spacing: 0.5pt;
+            text-transform: uppercase;
+            font-weight: 700;
+            text-shadow: 1px 1px 2px rgba(7, 33, 46, 0.1);
+        }
+        
+        .stats-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 6pt;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(7, 33, 46, 0.1);
+        }
+        
+        .stats-table tr {
+            border-bottom: 1pt solid rgba(134, 146, 155, 0.3);
+            transition: background-color 0.3s ease;
+        }
+        
+        .stats-table tr:hover {
+            background-color: rgba(64, 106, 155, 0.05);
+        }
+        
+        .stats-table tr:last-child {
+            border-bottom: none;
+        }
+        
+        .stats-table td {
+            padding: 10pt 12pt;
+            vertical-align: top;
+            font-size: 11pt;
+        }
+        
+        .stats-table td:first-child {
+            font-weight: 700;
+            width: 40%;
+            color: #07212e;
+            background: linear-gradient(135deg, rgba(64, 106, 155, 0.1) 0%, rgba(255, 246, 236, 0.5) 100%);
+        }
+        
+        .stats-table td:last-child {
+            color: #07212e;
+            font-weight: 500;
+        }
+        
+        /* Awards section */
+        .awards-section {
+            margin-top: 35pt;
+            background: linear-gradient(135deg, #fff6ec 0%, #f5f0e8 100%);
+            border: 2pt solid #915f55;
+            border-radius: 12pt;
+            padding: 25pt;
+            page-break-inside: avoid;
+            box-shadow: 0 8px 25px rgba(145, 95, 85, 0.2);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .awards-section::before {
+            content: '';
+            position: absolute;
+            top: -50pt;
+            right: -50pt;
+            width: 150pt;
+            height: 150pt;
+            background: radial-gradient(circle, rgba(64, 106, 155, 0.1) 0%, transparent 70%);
+        }
+        
+        .awards-section h2 {
+            font-family: 'Graduate', sans-serif;
+            text-align: center;
+            border: none;
+            margin-bottom: 20pt;
+            color: #915f55;
+            text-shadow: 2px 2px 4px rgba(7, 33, 46, 0.1);
+            font-size: 22pt;
+            font-weight: 700;
+        }
+        
+        .award {
+            margin-bottom: 18pt;
+            font-size: 12pt;
+            padding: 12pt;
+            background: rgba(255, 255, 255, 0.7);
+            border-radius: 8pt;
+            border-left: 4pt solid #406a9b;
+            box-shadow: 0 3px 10px rgba(7, 33, 46, 0.05);
+        }
+        
+        .award-title {
+            font-family: 'american-typewriter', 'Courier Prime', 'Courier New', monospace;
+            font-weight: 700;
+            color: #915f55;
+            text-transform: uppercase;
+            letter-spacing: 0.5pt;
+            font-size: 11pt;
+        }
+        
+        .award-winner {
+            font-weight: 600;
+            color: #07212e;
+            font-size: 12pt;
+        }
+        
+        /* Document footer */
+        .document-footer {
+            text-align: center;
+            margin-top: 35pt;
+            padding: 20pt;
+            border-top: 2pt solid #86929b;
+            font-style: italic;
+            color: #915f55;
+            font-size: 11pt;
+            background: linear-gradient(135deg, #fff6ec 0%, #f5f0e8 100%);
+            border-radius: 8pt;
+            box-shadow: 0 3px 10px rgba(7, 33, 46, 0.05);
+        }
+        
+        /* Running footer for pages */
+        .page-footer {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 10pt;
+            color: #fff6ec;
+            background: linear-gradient(135deg, #07212e 0%, #406a9b 50%, #86929b 100%);
+            min-height: 0.8in;
+            padding: 0.3in 1in;
+            box-shadow: 0 -4px 15px rgba(7, 33, 46, 0.25);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            border-top: 3px solid #915f55;
+        }
+        
+        .page-footer::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(45deg, rgba(255,246,236,0.1) 0%, transparent 100%);
+            pointer-events: none;
+        }
+        
+        @media print {
+            .page-footer {
+                position: fixed;
+            }
+            
+            body {
+                background: #fff6ec;
+            }
+            
+            .matchup {
+                page-break-inside: avoid;
+            }
+        }
+        
+        /* Utility classes */
+        .text-center { text-align: center; }
+        .smallcaps { 
+            font-variant: small-caps; 
+            text-transform: lowercase;
+        }
+        .underline { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <!-- Running header (appears on every page) -->
+    <div class="page-header">
+        <span>{{ LEAGUE_LOGO }}</span>
+        <div class="right-header">
+            <span class="header-title">The Gridiron Gazette</span>
+            <span class="header-tagline">Because someone needs to report on your team's latest disaster</span>
+        </div>
+    </div>
+    
+    <!-- Main document content -->
+    <div class="document-wrapper">
+        
+        <!-- Title section (only on first page) -->
+        <div class="title-section">
+            <h1>Week {{ WEEK_NUMBER }} Recap</h1>
+            <div class="gazette-tagline">For those times when everyone wants to know your score.</div>
+        </div>
+        
+        <!-- Weekly intro -->
+        {% if WEEKLY_INTRO %}
+        <p class="intro-paragraph">{{ WEEKLY_INTRO }}</p>
+        {% endif %}
+        
+        <!-- Game Recaps Section -->
+        <h2>Game Recaps</h2>
+        
+        <!-- Matchup 1 -->
+        {% if MATCHUP1_HOME %}
+        <div class="matchup">
+            <h3>{{ MATCHUP1_HOME }} vs. {{ MATCHUP1_AWAY }}</h3>
+            
+            <div class="matchup-box">
+                <!-- Home Team -->
+                <div class="team-row">
+                    {% if MATCHUP1_HOME_LOGO %}
+                    <img src="{{ MATCHUP1_HOME_LOGO }}" alt="{{ MATCHUP1_HOME }}" class="team-logo">
+                    {% endif %}
+                    <div class="team-name smallcaps">
+                        {{ MATCHUP1_HOME }} —
+                    </div>
+                    <div class="team-score">
+                        {{ MATCHUP1_HS }}
+                    </div>
+                </div>
+                
+                <div class="vs-divider">vs.</div>
+                
+                <!-- Away Team -->
+                <div class="team-row">
+                    {% if MATCHUP1_AWAY_LOGO %}
+                    <img src="{{ MATCHUP1_AWAY_LOGO }}" alt="{{ MATCHUP1_AWAY }}" class="team-logo">
+                    {% endif %}
+                    <div class="team-name smallcaps">
+                        {{ MATCHUP1_AWAY }} —
+                    </div>
+                    <div class="team-score">
+                        {{ MATCHUP1_AS }}
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Game narrative -->
+            {% if MATCHUP1_BLURB %}
+            <div class="game-narrative">
+                {{ MATCHUP1_BLURB }}
+            </div>
+            {% endif %}
+            
+            <!-- Stats Spotlight -->
+            <div class="stats-spotlight">
+                <h4>Stats Spotlight</h4>
+                <table class="stats-table">
+                    <tr>
+                        <td>Top Scorer (Home):</td>
+                        <td>{{ MATCHUP1_TOP_HOME }}</td>
+                    </tr>
+                    <tr>
+                        <td>Top Scorer (Away):</td>
+                        <td>{{ MATCHUP1_TOP_AWAY }}</td>
+                    </tr>
+                    <tr>
+                        <td>Biggest Bust:</td>
+                        <td>{{ MATCHUP1_BUST }}</td>
+                    </tr>
+                    <tr>
+                        <td>Key Play:</td>
+                        <td>{{ MATCHUP1_KEYPLAY }}</td>
+                    </tr>
+                    <tr>
+                        <td>Defense Note:</td>
+                        <td>{{ MATCHUP1_DEF }}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+        
+        <!-- Matchup 2 -->
+        {% if MATCHUP2_HOME %}
+        <div class="matchup">
+            <h3>{{ MATCHUP2_HOME }} vs. {{ MATCHUP2_AWAY }}</h3>
+            
+            <div class="matchup-box">
+                <!-- Home Team -->
+                <div class="team-row">
+                    {% if MATCHUP2_HOME_LOGO %}
+                    <img src="{{ MATCHUP2_HOME_LOGO }}" alt="{{ MATCHUP2_HOME }}" class="team-logo">
+                    {% endif %}
+                    <div class="team-name smallcaps">
+                        {{ MATCHUP2_HOME }} —
+                    </div>
+                    <div class="team-score">
+                        {{ MATCHUP2_HS }}
+                    </div>
+                </div>
+                
+                <div class="vs-divider">vs.</div>
+                
+                <!-- Away Team -->
+                <div class="team-row">
+                    {% if MATCHUP2_AWAY_LOGO %}
+                    <img src="{{ MATCHUP2_AWAY_LOGO }}" alt="{{ MATCHUP2_AWAY }}" class="team-logo">
+                    {% endif %}
+                    <div class="team-name smallcaps">
+                        {{ MATCHUP2_AWAY }} —
+                    </div>
+                    <div class="team-score">
+                        {{ MATCHUP2_AS }}
+                    </div>
+                </div>
+            </div>
+            
+            {% if MATCHUP2_BLURB %}
+            <div class="game-narrative">
+                {{ MATCHUP2_BLURB }}
+            </div>
+            {% endif %}
+            
+            <div class="stats-spotlight">
+                <h4>Stats Spotlight</h4>
+                <table class="stats-table">
+                    <tr>
+                        <td>Top Scorer (Home):</td>
+                        <td>{{ MATCHUP2_TOP_HOME }}</td>
+                    </tr>
+                    <tr>
+                        <td>Top Scorer (Away):</td>
+                        <td>{{ MATCHUP2_TOP_AWAY }}</td>
+                    </tr>
+                    <tr>
+                        <td>Biggest Bust:</td>
+                        <td>{{ MATCHUP2_BUST }}</td>
+                    </tr>
+                    <tr>
+                        <td>Key Play:</td>
+                        <td>{{ MATCHUP2_KEYPLAY }}</td>
+                    </tr>
+                    <tr>
+                        <td>Defense Note:</td>
+                        <td>{{ MATCHUP2_DEF }}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+        
+        <!-- Matchup 3 -->
+        {% if MATCHUP3_HOME %}
+        <div class="matchup">
+            <h3>{{ MATCHUP3_HOME }} vs. {{ MATCHUP3_AWAY }}</h3>
+            
+            <div class="matchup-box">
+                <div class="team-row">
+                    {% if MATCHUP3_HOME_LOGO %}
+                    <img src="{{ MATCHUP3_HOME_LOGO }}" alt="{{ MATCHUP3_HOME }}" class="team-logo">
+                    {% endif %}
+                    <div class="team-name smallcaps">
+                        {{ MATCHUP3_HOME }} —
+                    </div>
+                    <div class="team-score">
+                        {{ MATCHUP3_HS }}
+                    </div>
+                </div>
+                
+                <div class="vs-divider">vs.</div>
+                
+                <div class="team-row">
+                    {% if MATCHUP3_AWAY_LOGO %}
+                    <img src="{{ MATCHUP3_AWAY_LOGO }}" alt="{{ MATCHUP3_AWAY }}" class="team-logo">
+                    {% endif %}
+                    <div class="team-name smallcaps">
+                        {{ MATCHUP3_AWAY }} —
+                    </div>
+                    <div class="team-score">
+                        {{ MATCHUP3_AS }}
+                    </div>
+                </div>
+            </div>
+            
+            {% if MATCHUP3_BLURB %}
+            <div class="game-narrative">
+                {{ MATCHUP3_BLURB }}
+            </div>
+            {% endif %}
+            
+            <div class="stats-spotlight">
+                <h4>Stats Spotlight</h4>
+                <table class="stats-table">
+                    <tr>
+                        <td>Top Scorer (Home):</td>
+                        <td>{{ MATCHUP3_TOP_HOME }}</td>
+                    </tr>
+                    <tr>
+                        <td>Top Scorer (Away):</td>
+                        <td>{{ MATCHUP3_TOP_AWAY }}</td>
+                    </tr>
+                    <tr>
+                        <td>Biggest Bust:</td>
+                        <td>{{ MATCHUP3_BUST }}</td>
+                    </tr>
+                    <tr>
+                        <td>Key Play:</td>
+                        <td>{{ MATCHUP3_KEYPLAY }}</td>
+                    </tr>
+                    <tr>
+                        <td>Defense Note:</td>
+                        <td>{{ MATCHUP3_DEF }}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+        
+        <!-- Continue with more matchups as needed -->
+        <!-- You can copy the pattern above for MATCHUP4, MATCHUP5, etc. -->
+        
+        <!-- Weekly Awards -->
+        <div class="awards-section">
+            <h2>Weekly Awards: The Ridiculous Roundup</h2>
+            
+            {% if AWARD_CUPCAKE_TEAM %}
+            <div class="award">
+                <span class="award-title">Cupcake Award (Lowest Score):</span><br>
+                <span class="award-winner">{{ AWARD_CUPCAKE_TEAM }}</span>
+                {% if AWARD_CUPCAKE_NOTE %} — {{ AWARD_CUPCAKE_NOTE }}{% endif %}
+            </div>
+            {% endif %}
+            
+            {% if AWARD_KITTY_TEAM %}
+            <div class="award">
+                <span class="award-title">Kitty Award (Largest Gap Loss):</span><br>
+                <span class="award-winner">{{ AWARD_KITTY_TEAM }}</span>
+                {% if AWARD_KITTY_NOTE %} — {{ AWARD_KITTY_NOTE }}{% endif %}
+            </div>
+            {% endif %}
+            
+            {% if AWARD_TOP_TEAM %}
+            <div class="award">
+                <span class="award-title">Top Score:</span><br>
+                <span class="award-winner">{{ AWARD_TOP_TEAM }}</span>
+                {% if AWARD_TOP_NOTE %} — {{ AWARD_TOP_NOTE }}{% endif %}
+            </div>
+            {% endif %}
+        </div>
+        
+        <!-- Document footer -->
+        <div class="document-footer">
+            {% if FOOTER_NOTE %}{{ FOOTER_NOTE }} • {% endif %}See everyone Thursday!
+        </div>
+        
+    </div>
+    
+    <!-- Page footer with gradient (appears on every page) -->
+    <div class="page-footer">
+        <div style="color: #fff6ec; font-size: 11pt; font-weight: 700; text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.3);">Page 1</div>
+        <div style="color: rgba(255, 246, 236, 0.9); font-size: 10pt; margin-top: 6pt; text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);">{{ SPONSOR_LOGO }} • The Gridiron Gazette • Week {{ WEEK_NUMBER }}</div>
+    </div>
+</body>
+</html>
